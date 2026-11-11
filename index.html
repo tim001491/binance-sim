@@ -184,8 +184,9 @@
   };
   function findPivots(slice, w) {
     let piv = [];
-    for (let i = w; i < slice.length - w; i++) {
-      const win = slice.slice(i - w, i + w + 1);
+    // 右側只要有 2 根K就先確認轉折（最新的轉折點也能即時抓到），左側用完整的靈敏度
+    for (let i = w; i < slice.length - 2; i++) {
+      const win = slice.slice(i - w, Math.min(slice.length, i + w + 1));
       const isH = slice[i].high === Math.max(...win.map(c => c.high));
       const isL = slice[i].low === Math.min(...win.map(c => c.low));
       for (const [ok, type, price] of [[isH, 'H', slice[i].high], [isL, 'L', slice[i].low]]) {
