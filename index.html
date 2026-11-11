@@ -65,7 +65,7 @@
 <main>
   <div>
     <div id="chart"></div>
-    <p class="hint">黃色粗線＝√(區間高×區間低)，藍線＝√(相鄰兩轉折點相乘)，黃色虛線＝區間高低點，▲▼＝自動偵測的轉折點。</p>
+    <p class="hint"><b style="color:#b26bff">紫線＝壓力／賣出參考</b>：√(最近高點 × 這波下跌的低點)。<b style="color:#ff9f1a">橘線＝支撐／停損</b>：√(前一個低點 × 最近高點)。▲▼＝用到的轉折點（低點會跟著即時價格更新）。</p>
   </div>
 
   <div>
@@ -81,9 +81,6 @@
           <option value="5" selected>中（左右 5 根）</option>
           <option value="10">低（左右 10 根）</option>
         </select>
-      </div>
-      <div class="row">
-        <label>取最近</label><input id="count" type="number" min="2" max="12" value="4"><label>個轉折點</label>
       </div>
       <div class="row">
         <button id="lockBtn">🔓 自動更新價位</button>
@@ -109,18 +106,16 @@
       <div class="row">
         <select id="strategy">
           <option value="off">關閉（只提醒）</option>
-          <option value="bounce">反彈：碰支撐買、碰壓力賣</option>
-          <option value="breakout">突破：向上穿越買、向下跌破賣</option>
+          <option value="exit">持倉時：碰紫線自動賣出、跌破橘線自動停損</option>
         </select>
       </div>
       <div class="row">
-        <label>停損</label><input id="sl" type="number" step="0.1" min="0" value="1"><label>%</label>
-        <label>停利</label><input id="tp" type="number" step="0.1" min="0" value="2"><label>%</label>
+        <label>保險停損</label><input id="sl" type="number" step="0.1" min="0" value="1"><label>%（設 0 不使用）</label>
       </div>
       <div class="row">
         <label>每日最多</label><input id="maxTrades" type="number" min="1" value="10"><label>筆進場</label>
       </div>
-      <p class="hint">手續費以 0.1% 模擬。停損／停利設 0 代表不使用。</p>
+      <p class="hint">買進目前用手動按鈕。手續費以 0.1% 模擬。保險停損是防止價格沒碰到橘線就一路跌時的最後防線。</p>
     </div>
   </div>
 
@@ -153,9 +148,9 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
   };
-  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','strategy','sl','tp','maxTrades'];
+  const SETTING_IDS = ['symbol','interval','lookback','step','tradeSize','strategy','sl','maxTrades'];
   const saved = store.get('sqrt_settings', {});
-  SETTING_IDS.forEach(id => { if (saved[id] != null) $(id).value = saved[id]; });
+  SETTING_IDS.forEach(id => { if (saved[id] != null) $(id).value = saved[id]; if ($(id).tagName === 'SELECT' && !$(id).value) $(id).selectedIndex = id === 'step' ? 1 : 0; });
   const saveSettings = () => store.set('sqrt_settings', Object.fromEntries(SETTING_IDS.map(id => [id, $(id).value])));
 
   let acct = store.get('sqrt_acct', null) || newAcct();
@@ -182,18 +177,12 @@
   const fmt = (p, d) => p == null || isNaN(p) ? '--' : Number(p).toLocaleString('en-US', { minimumFractionDigits: d ?? decimals(p), maximumFractionDigits: d ?? decimals(p) });
 
   // ---------- square-root levels ----------
-  function calcLevels() {
-    if (!candles.length) return;
-    const n = Math.max(10, +$('lookback').value || 100);
-    const slice = candles.slice(-n);
-    const H = Math.max(...slice.map(c => c.high)), L = Math.min(...slice.map(c => c.low));
-    const w = +$('step').value || 5, cnt = Math.min(12, Math.max(2, +$('count').value || 4));
-    const out = [
-      { price: H, kind: 'high', label: '區間高' },
-      { price: L, kind: 'low', label: '區間低' },
-      { price: Math.sqrt(H * L), kind: 'main', label: '√(高×低)' }
-    ];
-    // swing turning points (pivots): a bar whose high/low is the extreme within ±w bars
+  // 壓力／賣出參考 = √(最近高點 × 之後的低點)；支撐／停損 = √(前一個低點 × 最近高點)
+  const LV = {
+    res: { label: '壓力／賣出參考', color: '#b26bff' },
+    sup: { label: '支撐／停損', color: '#ff9f1a' }
+  };
+  function findPivots(slice, w) {
     let piv = [];
     for (let i = w; i < slice.length - w; i++) {
       const win = slice.slice(i - w, i + w + 1);
@@ -201,41 +190,63 @@
       const isL = slice[i].low === Math.min(...win.map(c => c.low));
       for (const [ok, type, price] of [[isH, 'H', slice[i].high], [isL, 'L', slice[i].low]]) {
         if (!ok) continue;
-        const last = piv.at(-1);
-        if (last && last.type === type) { if (type === 'H' ? price > last.price : price < last.price) piv[piv.length - 1] = { type, price, time: slice[i].time }; }
-        else piv.push({ type, price, time: slice[i].time });
+        const last = piv.at(-1), p = { type, price, idx: i, time: slice[i].time };
+        if (last && last.type === type) { if (type === 'H' ? price > last.price : price < last.price) piv[piv.length - 1] = p; }
+        else piv.push(p);
       }
     }
-    piv = piv.slice(-cnt);
-    series.setMarkers(piv.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 0) })));
-    for (let i = 1; i < piv.length; i++) {
-      const a = piv[i - 1].price, b = piv[i].price;
-      out.push({ price: Math.sqrt(a * b), kind: 'pair', label: `√(${fmt(a, 0)}×${fmt(b, 0)})` });
+    // extend with the unconfirmed move after the last pivot (updates live with the current candle)
+    for (let guard = 0; guard < 2 && piv.length; guard++) {
+      const last = piv.at(-1), after = slice.slice(last.idx + 1);
+      if (!after.length) break;
+      if (last.type === 'H') {
+        const hi = Math.max(...after.map(c => c.high));
+        if (hi > last.price) { const j = last.idx + 1 + after.findIndex(c => c.high === hi); piv[piv.length - 1] = { type: 'H', price: hi, idx: j, time: slice[j].time }; continue; }
+        const lo = Math.min(...after.map(c => c.low)), j = last.idx + 1 + after.findIndex(c => c.low === lo);
+        piv.push({ type: 'L', price: lo, idx: j, time: slice[j].time, live: true }); break;
+      } else {
+        const lo = Math.min(...after.map(c => c.low));
+        if (lo < last.price) { const j = last.idx + 1 + after.findIndex(c => c.low === lo); piv[piv.length - 1] = { type: 'L', price: lo, idx: j, time: slice[j].time }; continue; }
+        const hi = Math.max(...after.map(c => c.high)), j = last.idx + 1 + after.findIndex(c => c.high === hi);
+        piv.push({ type: 'H', price: hi, idx: j, time: slice[j].time, live: true }); break;
+      }
     }
-    // merge levels that are practically the same price (within 0.02%)
-    const PRI = { main: 0, high: 1, low: 1, pair: 2 };
+    return piv;
+  }
+  function calcLevels() {
+    if (!candles.length) return;
+    const n = Math.max(20, +$('lookback').value || 100);
+    const slice = candles.slice(-n);
+    const piv = findPivots(slice, +$('step').value || 5);
+    // latest high, the low after it (down leg), and the low before it (up leg)
+    let hIdx = -1;
+    for (let i = piv.length - 1; i >= 0; i--) if (piv[i].type === 'H') { hIdx = i; break; }
+    const H = piv[hIdx], lowAfter = piv[hIdx + 1], lowBefore = piv[hIdx - 1];
     levels = [];
-    for (const l of out.sort((a, b) => PRI[a.kind] - PRI[b.kind])) if (!levels.some(k => Math.abs(k.price - l.price) / l.price <= 0.0002)) levels.push(l);
-    levels.sort((a, b) => b.price - a.price);
+    if (H && lowAfter) levels.push({ kind: 'res', price: Math.sqrt(H.price * lowAfter.price), a: H.price, b: lowAfter.price });
+    if (H && lowBefore) levels.push({ kind: 'sup', price: Math.sqrt(lowBefore.price * H.price), a: lowBefore.price, b: H.price });
+    levels.forEach(l => l.label = LV[l.kind].label);
+    const used = [lowBefore, H, lowAfter].filter(Boolean);
+    series.setMarkers(used.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 0) + (p.live ? '（即時）' : '') })));
     drawLevels();
   }
-  const COLOR = { main: '#f0b90b', pair: '#4c8dff', high: '#f0b90b', low: '#f0b90b' };
+  const lines = {};
   function drawLevels() {
-    priceLines.forEach(l => series.removePriceLine(l));
-    priceLines = levels.map(l => series.createPriceLine({
-      price: l.price, color: COLOR[l.kind],
-      lineWidth: l.kind === 'main' ? 2 : 1, lineStyle: l.kind === 'high' || l.kind === 'low' ? 2 : 0,
-      axisLabelVisible: true, title: ''
-    }));
+    for (const kind of ['res', 'sup']) {
+      const l = levels.find(x => x.kind === kind);
+      if (l && !lines[kind]) lines[kind] = series.createPriceLine({ price: l.price, color: LV[kind].color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: '' });
+      else if (l) lines[kind].applyOptions({ price: l.price });
+      else if (lines[kind]) { series.removePriceLine(lines[kind]); delete lines[kind]; }
+    }
     renderLevels();
   }
   function renderLevels() {
     const p = lastPrice;
-    $('levels').innerHTML = levels.map(l => {
-      const cls = l.kind === 'main' ? '' : p && l.price > p ? 'neg' : 'pos';
+    $('levels').innerHTML = levels.length ? levels.map(l => {
       const dist = p ? ((l.price - p) / p * 100).toFixed(2) + '%' : '';
-      return `<div><span class="${cls}">${l.label}</span><span>${fmt(l.price)} <small style="color:#8b93a7">${dist}</small></span></div>`;
-    }).join('');
+      return `<div><span style="color:${LV[l.kind].color};font-weight:600">${l.label}</span><span>${fmt(l.price)} <small style="color:#8b93a7">${dist}</small></span></div>
+              <div style="border:0;color:#8b93a7;font-size:12px"><span>√(${fmt(l.a, 2)} × ${fmt(l.b, 2)})</span><span></span></div>`;
+    }).join('') : '<div style="color:#8b93a7">轉折點還不夠，請把「取最近 N 根K」調大或靈敏度調高</div>';
   }
 
   // ---------- data ----------
@@ -273,7 +284,7 @@
       if (last && last.time === c.time) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); }
       series.update(c);
       onPrice(c.close);
-      if (k.x && !locked) calcLevels();
+      if (!locked) calcLevels();
     };
     ws.onclose = () => {
       if (my !== gen) return;
@@ -293,7 +304,7 @@
       for (const l of levels) {
         const up = prev < l.price && p >= l.price, down = prev > l.price && p <= l.price;
         if (!up && !down) continue;
-        const key = l.kind + l.price.toFixed(4);
+        const key = l.kind;
         if (now - (cooldown.get(key) || 0) < 60000) continue;
         cooldown.set(key, now);
         const msg = `${up ? '⬆ 向上穿越' : '⬇ 向下跌破'} ${l.label} ${fmt(l.price)}`;
@@ -333,20 +344,14 @@
   function autoTrade(l, up) {
     const s = $('strategy').value; if (s === 'off') return;
     const holding = acct.qty > 0;
-    if (s === 'bounce') {
-      // price falling onto a level = touching support; rising into a level = touching resistance
-      if (!holding && !up) buy('自動：由上往下碰關鍵價（支撐）');
-      else if (holding && up) sell('自動：由下往上碰關鍵價（壓力）');
-    } else if (s === 'breakout') {
-      if (!holding && up) buy('自動：向上突破');
-      else if (holding && !up) sell('自動：向下跌破');
-    }
+    if (!holding || s !== 'exit') return;
+    if (l.kind === 'res' && up) sell('自動：碰到壓力／賣出參考');
+    else if (l.kind === 'sup' && !up) sell('自動：跌破支撐／停損');
   }
   function checkStops(p) {
     if (acct.qty <= 0 || acct.symbol !== $('symbol').value) return;
-    const chg = (p - acct.entry) / acct.entry * 100, sl = +$('sl').value, tp = +$('tp').value;
-    if (sl > 0 && chg <= -sl) { sell(`停損 ${chg.toFixed(2)}%`); alertUser('⛔ 觸發停損'); }
-    else if (tp > 0 && chg >= tp) { sell(`停利 +${chg.toFixed(2)}%`); alertUser('✅ 觸發停利'); }
+    const chg = (p - acct.entry) / acct.entry * 100, sl = +$('sl').value;
+    if (sl > 0 && chg <= -sl) { sell(`保險停損 ${chg.toFixed(2)}%`); alertUser('⛔ 觸發保險停損'); }
   }
   function renderAcct() {
     const same = acct.symbol === $('symbol').value;
@@ -409,8 +414,8 @@
     else { $('resetBtn').dataset.confirm = 1; $('resetBtn').textContent = '再按一次確認'; setTimeout(() => { delete $('resetBtn').dataset.confirm; $('resetBtn').textContent = '重設帳戶'; }, 3000); }
   };
   ['symbol', 'interval'].forEach(id => $(id).onchange = () => { saveSettings(); load(); });
-  ['lookback', 'step', 'count'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
-  ['tradeSize', 'strategy', 'sl', 'tp', 'maxTrades'].forEach(id => $(id).onchange = saveSettings);
+  ['lookback', 'step'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
+  ['tradeSize', 'strategy', 'sl', 'maxTrades'].forEach(id => $(id).onchange = saveSettings);
 
   $('log').innerHTML = acct.log.map(x => `<div>${x}</div>`).join('');
   renderAcct();
