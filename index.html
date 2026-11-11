@@ -46,7 +46,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v4</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v5</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -175,7 +175,7 @@
     autoSize: true,
     layout: { background: { color: '#171a21' }, textColor: '#8b93a7' },
     grid: { vertLines: { color: '#1f232c' }, horzLines: { color: '#1f232c' } },
-    rightPriceScale: { borderColor: '#262b36', minimumWidth: 80 },
+    rightPriceScale: { borderColor: '#262b36', minimumWidth: 80, scaleMargins: { top: 0.14, bottom: 0.1 } },
     timeScale: { borderColor: '#262b36', timeVisible: true, secondsVisible: false, rightOffset: 12 },
     crosshair: { mode: 0 }
   });
@@ -319,7 +319,7 @@
       seen[kind] = true;
     }
     const used = piv.slice(Math.max(0, piv.length - 1 - levels.length));
-    series.setMarkers(used.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 0) + (p.live ? '（即時）' : '') })));
+    series.setMarkers(used.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 2) + (p.live ? '（即時）' : '') })));
     drawLevels();
   }
   let lines = [];
