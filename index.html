@@ -195,7 +195,16 @@
       for (const [ok, type, price] of [[isH, 'H', slice[i].high], [isL, 'L', slice[i].low]]) {
         if (!ok) continue;
         const last = piv.at(-1), p = { type, price, idx: i, time: slice[i].time };
-        if (last && last.type === type) { if (type === 'H' ? price > last.price : price < last.price) piv[piv.length - 1] = p; }
+        if (last && last.type === type) {
+          const lowerHigh = type === 'H' && price < last.price, higherLow = type === 'L' && price > last.price;
+          if ((lowerHigh || higherLow) && i - last.idx > 1) {
+            // 反彈到較低的高點（或回檔到較高的低點）：中間那個最低（最高）點也是轉折，補進去
+            const mid = slice.slice(last.idx + 1, i);
+            const ext = type === 'H' ? Math.min(...mid.map(c => c.low)) : Math.max(...mid.map(c => c.high));
+            const j = last.idx + 1 + mid.findIndex(c => (type === 'H' ? c.low : c.high) === ext);
+            if (type === 'H' ? ext < price : ext > price) { piv.push({ type: type === 'H' ? 'L' : 'H', price: ext, idx: j, time: slice[j].time }); piv.push(p); }
+          } else if (type === 'H' ? price > last.price : price < last.price) piv[piv.length - 1] = p;
+        }
         else piv.push(p);
       }
     }
