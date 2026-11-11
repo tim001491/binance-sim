@@ -170,7 +170,7 @@
     layout: { background: { color: '#171a21' }, textColor: '#8b93a7' },
     grid: { vertLines: { color: '#1f232c' }, horzLines: { color: '#1f232c' } },
     rightPriceScale: { borderColor: '#262b36' },
-    timeScale: { borderColor: '#262b36', timeVisible: true, secondsVisible: false },
+    timeScale: { borderColor: '#262b36', timeVisible: true, secondsVisible: false, rightOffset: 12 },
     crosshair: { mode: 0 }
   });
   const series = chart.addCandlestickSeries({ upColor: '#16c784', downColor: '#ea3943', borderVisible: false, wickUpColor: '#16c784', wickDownColor: '#ea3943' });
@@ -213,7 +213,10 @@
       out.push({ price: Math.sqrt(a * b), kind: 'pair', label: `√(${fmt(a, 0)}×${fmt(b, 0)})` });
     }
     // merge levels that are practically the same price (within 0.02%)
-    levels = out.sort((a, b) => b.price - a.price).filter((l, i, arr) => i === 0 || Math.abs(arr[i - 1].price - l.price) / l.price > 0.0002);
+    const PRI = { main: 0, high: 1, low: 1, pair: 2 };
+    levels = [];
+    for (const l of out.sort((a, b) => PRI[a.kind] - PRI[b.kind])) if (!levels.some(k => Math.abs(k.price - l.price) / l.price <= 0.0002)) levels.push(l);
+    levels.sort((a, b) => b.price - a.price);
     drawLevels();
   }
   const COLOR = { main: '#f0b90b', pair: '#4c8dff', high: '#f0b90b', low: '#f0b90b' };
@@ -222,7 +225,7 @@
     priceLines = levels.map(l => series.createPriceLine({
       price: l.price, color: COLOR[l.kind],
       lineWidth: l.kind === 'main' ? 2 : 1, lineStyle: l.kind === 'high' || l.kind === 'low' ? 2 : 0,
-      axisLabelVisible: true, title: { main: '√高低', pair: '√轉折', high: '高', low: '低' }[l.kind]
+      axisLabelVisible: true, title: ''
     }));
     renderLevels();
   }
