@@ -65,7 +65,7 @@
 <main>
   <div>
     <div id="chart"></div>
-    <p class="hint"><b style="color:#b26bff">紫線＝壓力／賣出參考</b>：√(最近一段下跌的高點 × 低點)。<b style="color:#ff9f1a">橘線＝支撐／停損</b>：√(最近一段上漲的低點 × 高點)。▲▼＝用到的轉折點（低點會跟著即時價格更新）。</p>
+    <p class="hint">由右往左找最近的轉折點，相鄰兩點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。最右邊那段會跟著即時價格更新。</p>
   </div>
 
   <div>
@@ -177,7 +177,7 @@
   const fmt = (p, d) => p == null || isNaN(p) ? '--' : Number(p).toLocaleString('en-US', { minimumFractionDigits: d ?? decimals(p), maximumFractionDigits: d ?? decimals(p) });
 
   // ---------- square-root levels ----------
-  // 壓力／賣出參考 = √(最近高點 × 之後的低點)；支撐／停損 = √(最近一段上漲的低點 × 高點)
+  // 壓力／賣出參考 = √(最近高點 × 之後的低點)；支撐／停損 = 同一個高點 × 再往左的低點，再開根號
   const LV = {
     res: { label: '壓力／賣出參考', color: '#b26bff' },
     sup: { label: '支撐／停損', color: '#ff9f1a' }
@@ -218,7 +218,8 @@
     const n = Math.max(20, +$('lookback').value || 100);
     const slice = candles.slice(-n);
     const piv = findPivots(slice, +$('step').value || 5);
-    // 紫線：最近一段「高點→低點」的下跌段；橘線：最近一段「低點→高點」的上漲段
+    // 由右至左找最近的轉折點，每兩個相鄰轉折點算一次 √(A×B)，依走勢方向自動分色：
+    // 下跌段（左高→右低）＝紫線 壓力／賣出參考；上漲段（左低→右高）＝橘線 支撐／停損
     let down = null, up = null;
     for (let i = piv.length - 2; i >= 0 && (!down || !up); i--) {
       if (!down && piv[i].type === 'H') down = [piv[i], piv[i + 1]];
