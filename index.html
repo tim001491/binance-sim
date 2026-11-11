@@ -46,7 +46,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v3</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v4</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -70,12 +70,19 @@
     <div id="chart"></div>
     <div class="sub"><div class="tag" id="volTag">成交量</div><div id="volChart"></div></div>
     <div class="sub"><div class="tag" id="macdTag">MACD (12,26,9)</div><div id="macdChart"></div></div>
+    <div class="card" style="margin-top:6px">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">開根號關鍵價位</h2>
+        <button id="lockBtn">🔓 自動更新價位</button>
+      </div>
+      <div class="levels" id="levels"></div>
+    </div>
     <p class="hint">由右往左，每兩個相鄰轉折點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。實線＝最靠右（最新）的一條，虛線＝更左邊的舊轉折。最右邊那段會跟著即時價格重算。</p>
   </div>
 
   <div>
     <div class="card">
-      <h2>開根號關鍵價位</h2>
+      <h2>開根號設定</h2>
       <div class="row">
         <label>取最近</label><input id="lookback" type="number" min="10" max="1000" value="100"><label>根K</label>
       </div>
@@ -90,10 +97,6 @@
       <div class="row">
         <label>由右往左換算</label><input id="count" type="number" min="1" max="10" value="4"><label>段</label>
       </div>
-      <div class="row">
-        <button id="lockBtn">🔓 自動更新價位</button>
-      </div>
-      <div class="levels" id="levels"></div>
     </div>
 
     <div class="card">
