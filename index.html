@@ -168,7 +168,7 @@
     timeScale: { borderColor: '#262b36', timeVisible: true, secondsVisible: false, rightOffset: 12 },
     crosshair: { mode: 0 }
   });
-  const series = chart.addCandlestickSeries({ upColor: '#16c784', downColor: '#ea3943', borderVisible: false, wickUpColor: '#16c784', wickDownColor: '#ea3943' });
+  const series = chart.addCandlestickSeries({ upColor: '#ea3943', downColor: '#16c784', borderVisible: false, wickUpColor: '#ea3943', wickDownColor: '#16c784' });
 
   let candles = [], levels = [], priceLines = [], locked = false, lastPrice = null, ws = null, wsTimer = null, retry = 0, gen = 0;
   const cooldown = new Map();
