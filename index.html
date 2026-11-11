@@ -65,7 +65,7 @@
 <main>
   <div>
     <div id="chart"></div>
-    <p class="hint">由右往左找最近的轉折點，相鄰兩點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。最右邊那段會跟著即時價格更新。</p>
+    <p class="hint">由右往左，每兩個相鄰轉折點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。實線＝最靠右（最新）的一條，虛線＝更左邊的舊轉折。最右邊那段會跟著即時價格重算。</p>
   </div>
 
   <div>
@@ -81,6 +81,9 @@
           <option value="5" selected>中（左右 5 根）</option>
           <option value="10">低（左右 10 根）</option>
         </select>
+      </div>
+      <div class="row">
+        <label>由右往左換算</label><input id="count" type="number" min="1" max="10" value="4"><label>段</label>
       </div>
       <div class="row">
         <button id="lockBtn">🔓 自動更新價位</button>
@@ -148,7 +151,7 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
   };
-  const SETTING_IDS = ['symbol','interval','lookback','step','tradeSize','strategy','sl','maxTrades'];
+  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','strategy','sl','maxTrades'];
   const saved = store.get('sqrt_settings', {});
   SETTING_IDS.forEach(id => { if (saved[id] != null) $(id).value = saved[id]; if ($(id).tagName === 'SELECT' && !$(id).value) $(id).selectedIndex = id === 'step' ? 1 : 0; });
   const saveSettings = () => store.set('sqrt_settings', Object.fromEntries(SETTING_IDS.map(id => [id, $(id).value])));
@@ -219,36 +222,34 @@
     const n = Math.max(20, +$('lookback').value || 100);
     const slice = candles.slice(-n);
     const piv = findPivots(slice, +$('step').value || 5);
-    // 由右至左找最近的轉折點，每兩個相鄰轉折點算一次 √(A×B)，依走勢方向自動分色：
+    // 由右至左：相鄰兩個轉折點相乘開根號，依走勢方向自動分色
     // 下跌段（左高→右低）＝紫線 壓力／賣出參考；上漲段（左低→右高）＝橘線 支撐／停損
-    let down = null, up = null;
-    for (let i = piv.length - 2; i >= 0 && (!down || !up); i--) {
-      if (!down && piv[i].type === 'H') down = [piv[i], piv[i + 1]];
-      if (!up && piv[i].type === 'L') up = [piv[i], piv[i + 1]];
-    }
+    const cnt = Math.min(10, Math.max(1, +$('count').value || 4));
     levels = [];
-    if (down) levels.push({ kind: 'res', price: Math.sqrt(down[0].price * down[1].price), a: down[0].price, b: down[1].price });
-    if (up) levels.push({ kind: 'sup', price: Math.sqrt(up[0].price * up[1].price), a: up[0].price, b: up[1].price });
-    levels.forEach(l => l.label = LV[l.kind].label);
-    const used = [...new Set([...(down || []), ...(up || [])])];
+    const seen = {};
+    for (let i = piv.length - 2, rank = 1; i >= 0 && rank <= cnt; i--, rank++) {
+      const A = piv[i], B = piv[i + 1], kind = A.type === 'H' ? 'res' : 'sup';
+      levels.push({ kind, rank, primary: !seen[kind], price: Math.sqrt(A.price * B.price), a: A.price, b: B.price, label: `${rank}. ${LV[kind].label}` });
+      seen[kind] = true;
+    }
+    const used = piv.slice(Math.max(0, piv.length - 1 - levels.length));
     series.setMarkers(used.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 0) + (p.live ? '（即時）' : '') })));
     drawLevels();
   }
-  const lines = {};
+  let lines = [];
   function drawLevels() {
-    for (const kind of ['res', 'sup']) {
-      const l = levels.find(x => x.kind === kind);
-      if (l && !lines[kind]) lines[kind] = series.createPriceLine({ price: l.price, color: LV[kind].color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: '' });
-      else if (l) lines[kind].applyOptions({ price: l.price });
-      else if (lines[kind]) { series.removePriceLine(lines[kind]); delete lines[kind]; }
-    }
+    while (lines.length > levels.length) series.removePriceLine(lines.pop());
+    levels.forEach((l, i) => {
+      const opt = { price: l.price, color: LV[l.kind].color, lineWidth: l.primary ? 2 : 1, lineStyle: l.primary ? 0 : 2, axisLabelVisible: true, title: '' };
+      if (lines[i]) lines[i].applyOptions(opt); else lines[i] = series.createPriceLine(opt);
+    });
     renderLevels();
   }
   function renderLevels() {
     const p = lastPrice;
     $('levels').innerHTML = levels.length ? levels.map(l => {
       const dist = p ? ((l.price - p) / p * 100).toFixed(2) + '%' : '';
-      return `<div><span style="color:${LV[l.kind].color};font-weight:600">${l.label}</span><span>${fmt(l.price)} <small style="color:#8b93a7">${dist}</small></span></div>
+      return `<div><span style="color:${LV[l.kind].color};font-weight:${l.primary ? 700 : 400}">${l.label}</span><span>${fmt(l.price)} <small style="color:#8b93a7">${dist}</small></span></div>
               <div style="border:0;color:#8b93a7;font-size:12px"><span>√(${fmt(l.a, 2)} × ${fmt(l.b, 2)})</span><span></span></div>`;
     }).join('') : '<div style="color:#8b93a7">轉折點還不夠，請把「取最近 N 根K」調大或靈敏度調高</div>';
   }
@@ -308,7 +309,7 @@
       for (const l of levels) {
         const up = prev < l.price && p >= l.price, down = prev > l.price && p <= l.price;
         if (!up && !down) continue;
-        const key = l.kind;
+        const key = l.kind + l.rank;
         if (now - (cooldown.get(key) || 0) < 60000) continue;
         cooldown.set(key, now);
         const msg = `${up ? '⬆ 向上穿越' : '⬇ 向下跌破'} ${l.label} ${fmt(l.price)}`;
@@ -348,7 +349,7 @@
   function autoTrade(l, up) {
     const s = $('strategy').value; if (s === 'off') return;
     const holding = acct.qty > 0;
-    if (!holding || s !== 'exit') return;
+    if (!holding || s !== 'exit' || !l.primary) return;
     if (l.kind === 'res' && up) sell('自動：碰到壓力／賣出參考');
     else if (l.kind === 'sup' && !up) sell('自動：跌破支撐／停損');
   }
@@ -418,7 +419,7 @@
     else { $('resetBtn').dataset.confirm = 1; $('resetBtn').textContent = '再按一次確認'; setTimeout(() => { delete $('resetBtn').dataset.confirm; $('resetBtn').textContent = '重設帳戶'; }, 3000); }
   };
   ['symbol', 'interval'].forEach(id => $(id).onchange = () => { saveSettings(); load(); });
-  ['lookback', 'step'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
+  ['lookback', 'step', 'count'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
   ['tradeSize', 'strategy', 'sl', 'maxTrades'].forEach(id => $(id).onchange = saveSettings);
 
   $('log').innerHTML = acct.log.map(x => `<div>${x}</div>`).join('');
