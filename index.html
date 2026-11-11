@@ -23,6 +23,9 @@
   @media(max-width:900px){main{grid-template-columns:1fr}}
   #chart{height:440px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   @media(max-width:600px){#chart{height:360px}}
+  .sub{position:relative;margin-top:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  #volChart{height:110px} #macdChart{height:150px}
+  .sub .tag{position:absolute;left:8px;top:4px;z-index:3;font-size:11px;color:var(--mute);pointer-events:none;font-variant-numeric:tabular-nums}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
   .card h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;letter-spacing:.03em}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
@@ -43,7 +46,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v2</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v3</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -65,6 +68,8 @@
 <main>
   <div>
     <div id="chart"></div>
+    <div class="sub"><div class="tag" id="volTag">成交量</div><div id="volChart"></div></div>
+    <div class="sub"><div class="tag" id="macdTag">MACD (12,26,9)</div><div id="macdChart"></div></div>
     <p class="hint">由右往左，每兩個相鄰轉折點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。實線＝最靠右（最新）的一條，虛線＝更左邊的舊轉折。最右邊那段會跟著即時價格重算。</p>
   </div>
 
@@ -167,11 +172,80 @@
     autoSize: true,
     layout: { background: { color: '#171a21' }, textColor: '#8b93a7' },
     grid: { vertLines: { color: '#1f232c' }, horzLines: { color: '#1f232c' } },
-    rightPriceScale: { borderColor: '#262b36' },
+    rightPriceScale: { borderColor: '#262b36', minimumWidth: 80 },
     timeScale: { borderColor: '#262b36', timeVisible: true, secondsVisible: false, rightOffset: 12 },
     crosshair: { mode: 0 }
   });
   const series = chart.addCandlestickSeries({ upColor: '#ea3943', downColor: '#16c784', borderVisible: false, wickUpColor: '#ea3943', wickDownColor: '#16c784' });
+
+  // ---------- 成交量 & MACD 副圖（時間軸跟主圖同步）----------
+  const subOpts = showTime => ({
+    autoSize: true,
+    layout: { background: { color: '#171a21' }, textColor: '#8b93a7', attributionLogo: false },
+    grid: { vertLines: { color: '#1f232c' }, horzLines: { color: '#1f232c' } },
+    rightPriceScale: { borderColor: '#262b36', minimumWidth: 80, scaleMargins: { top: 0.18, bottom: 0.04 } },
+    timeScale: { borderColor: '#262b36', timeVisible: true, secondsVisible: false, rightOffset: 12, visible: showTime },
+    crosshair: { mode: 0 },
+    handleScroll: true, handleScale: true
+  });
+  const volChart = LWC.createChart($('volChart'), subOpts(false));
+  const volSeries = volChart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: true });
+  const macdChart = LWC.createChart($('macdChart'), subOpts(true));
+  const oscSeries = macdChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+  const difSeries = macdChart.addLineSeries({ color: '#f0b90b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  const deaSeries = macdChart.addLineSeries({ color: '#3d8bfd', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  {
+    const charts = [chart, volChart, macdChart];
+    let syncing = false;
+    charts.forEach(src => src.timeScale().subscribeVisibleLogicalRangeChange(r => {
+      if (syncing || !r) return;
+      syncing = true;
+      charts.forEach(c => c !== src && c.timeScale().setVisibleLogicalRange(r));
+      syncing = false;
+    }));
+  }
+  const UP = '#ea3943', DN = '#16c784';
+  const volPoint = c => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? UP + 'b3' : DN + 'b3' });
+  function macdCalc() {
+    const out = [];
+    let e12, e26, dea;
+    const k12 = 2 / 13, k26 = 2 / 27, k9 = 2 / 10;
+    candles.forEach((c, i) => {
+      e12 = i ? c.close * k12 + e12 * (1 - k12) : c.close;
+      e26 = i ? c.close * k26 + e26 * (1 - k26) : c.close;
+      const dif = e12 - e26;
+      dea = i ? dif * k9 + dea * (1 - k9) : dif;
+      out.push({ time: c.time, dif, dea, osc: dif - dea });
+    });
+    return out;
+  }
+  const oscColor = (m, prev) => m.osc >= 0 ? (prev && m.osc < prev.osc ? UP + '80' : UP) : (prev && m.osc > prev.osc ? DN + '80' : DN);
+  const fmtVol = v => v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(2) + 'K' : v.toFixed(2);
+  function showSubTags(m) {
+    const c = candles.at(-1);
+    if (c) $('volTag').textContent = `成交量 ${fmtVol(c.volume || 0)}`;
+    if (m) {
+      const d = (candles.at(-1)?.close || 0) >= 100 ? 2 : 4;
+      $('macdTag').innerHTML = `MACD (12,26,9)　<span style="color:#f0b90b">DIF ${m.dif.toFixed(d)}</span>　<span style="color:#3d8bfd">DEA ${m.dea.toFixed(d)}</span>　<span style="color:${m.osc >= 0 ? UP : DN}">OSC ${m.osc.toFixed(d)}</span>`;
+    }
+  }
+  function setSubData() {
+    volSeries.setData(candles.map(volPoint));
+    const m = macdCalc();
+    oscSeries.setData(m.map((x, i) => ({ time: x.time, value: x.osc, color: oscColor(x, m[i - 1]) })));
+    difSeries.setData(m.map(x => ({ time: x.time, value: x.dif })));
+    deaSeries.setData(m.map(x => ({ time: x.time, value: x.dea })));
+    showSubTags(m.at(-1));
+  }
+  function updateSubData() {
+    const c = candles.at(-1); if (!c) return;
+    volSeries.update(volPoint(c));
+    const m = macdCalc(), x = m.at(-1);
+    oscSeries.update({ time: x.time, value: x.osc, color: oscColor(x, m.at(-2)) });
+    difSeries.update({ time: x.time, value: x.dif });
+    deaSeries.update({ time: x.time, value: x.dea });
+    showSubTags(x);
+  }
 
   let candles = [], levels = [], priceLines = [], locked = false, lastPrice = null, ws = null, wsTimer = null, retry = 0, gen = 0;
   const cooldown = new Map();
@@ -275,8 +349,9 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
       if (my !== gen) return;
-      candles = data.map(k => ({ time: k[0] / 1000 + TZ, open: +k[1], high: +k[2], low: +k[3], close: +k[4] }));
+      candles = data.map(k => ({ time: k[0] / 1000 + TZ, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
       series.setData(candles);
+      setSubData();
       lastPrice = candles.at(-1).close;
       showPrice();
       calcLevels();
@@ -293,10 +368,11 @@
     ws.onmessage = ev => {
       if (my !== gen) return;
       const k = JSON.parse(ev.data).k; if (!k) return;
-      const c = { time: k.t / 1000 + TZ, open: +k.o, high: +k.h, low: +k.l, close: +k.c };
+      const c = { time: k.t / 1000 + TZ, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
       const last = candles.at(-1);
       if (last && last.time === c.time) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); }
       series.update(c);
+      updateSubData();
       onPrice(c.close);
       if (!locked) calcLevels();
     };
