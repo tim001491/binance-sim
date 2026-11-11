@@ -65,7 +65,7 @@
 <main>
   <div>
     <div id="chart"></div>
-    <p class="hint"><b style="color:#b26bff">紫線＝壓力／賣出參考</b>：√(最近高點 × 這波下跌的低點)。<b style="color:#ff9f1a">橘線＝支撐／停損</b>：√(前一個低點 × 最近高點)。▲▼＝用到的轉折點（低點會跟著即時價格更新）。</p>
+    <p class="hint"><b style="color:#b26bff">紫線＝壓力／賣出參考</b>：√(最近一段下跌的高點 × 低點)。<b style="color:#ff9f1a">橘線＝支撐／停損</b>：√(最近一段上漲的低點 × 高點)。▲▼＝用到的轉折點（低點會跟著即時價格更新）。</p>
   </div>
 
   <div>
@@ -177,7 +177,7 @@
   const fmt = (p, d) => p == null || isNaN(p) ? '--' : Number(p).toLocaleString('en-US', { minimumFractionDigits: d ?? decimals(p), maximumFractionDigits: d ?? decimals(p) });
 
   // ---------- square-root levels ----------
-  // 壓力／賣出參考 = √(最近高點 × 之後的低點)；支撐／停損 = √(前一個低點 × 最近高點)
+  // 壓力／賣出參考 = √(最近高點 × 之後的低點)；支撐／停損 = √(最近一段上漲的低點 × 高點)
   const LV = {
     res: { label: '壓力／賣出參考', color: '#b26bff' },
     sup: { label: '支撐／停損', color: '#ff9f1a' }
@@ -218,15 +218,17 @@
     const n = Math.max(20, +$('lookback').value || 100);
     const slice = candles.slice(-n);
     const piv = findPivots(slice, +$('step').value || 5);
-    // latest high, the low after it (down leg), and the low before it (up leg)
-    let hIdx = -1;
-    for (let i = piv.length - 1; i >= 0; i--) if (piv[i].type === 'H') { hIdx = i; break; }
-    const H = piv[hIdx], lowAfter = piv[hIdx + 1], lowBefore = piv[hIdx - 1];
+    // 紫線：最近一段「高點→低點」的下跌段；橘線：最近一段「低點→高點」的上漲段
+    let down = null, up = null;
+    for (let i = piv.length - 2; i >= 0 && (!down || !up); i--) {
+      if (!down && piv[i].type === 'H') down = [piv[i], piv[i + 1]];
+      if (!up && piv[i].type === 'L') up = [piv[i], piv[i + 1]];
+    }
     levels = [];
-    if (H && lowAfter) levels.push({ kind: 'res', price: Math.sqrt(H.price * lowAfter.price), a: H.price, b: lowAfter.price });
-    if (H && lowBefore) levels.push({ kind: 'sup', price: Math.sqrt(lowBefore.price * H.price), a: lowBefore.price, b: H.price });
+    if (down) levels.push({ kind: 'res', price: Math.sqrt(down[0].price * down[1].price), a: down[0].price, b: down[1].price });
+    if (up) levels.push({ kind: 'sup', price: Math.sqrt(up[0].price * up[1].price), a: up[0].price, b: up[1].price });
     levels.forEach(l => l.label = LV[l.kind].label);
-    const used = [lowBefore, H, lowAfter].filter(Boolean);
+    const used = [...new Set([...(down || []), ...(up || [])])];
     series.setMarkers(used.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 0) + (p.live ? '（即時）' : '') })));
     drawLevels();
   }
