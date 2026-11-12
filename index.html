@@ -50,7 +50,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v15</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v16</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -83,7 +83,7 @@
       <div class="levels" id="levels"></div>
       <h2 style="margin:12px 0 6px">成交量訊號（K棒收盤才判斷）</h2>
       <div class="levels" id="signals"></div>
-      <div style="color:#8b93a7;font-size:11px;margin-top:6px">多空都做：<b style="color:#f0b90b">● 多</b>／<b style="color:#3d8bfd">● 空</b>＝連續兩根同色量、後面比前面大；<b style="color:#f0b90b">● 多根</b>／<b style="color:#3d8bfd">● 空根</b>＝單一紅量的最高點突破根號壓力／單一綠量的最低點跌破根號支撐。做多＝有空單先平，做空＝有多單先平，多空一定交替出現。訊號只是參考。</div>
+      <div style="color:#8b93a7;font-size:11px;margin-top:6px">多空都做：<b style="color:#f0b90b">● 多</b>／<b style="color:#3d8bfd">● 空</b>＝連續兩根同色量、後面比前面大；<b style="color:#f0b90b">● 多根</b>／<b style="color:#3d8bfd">● 空根</b>＝單一紅量的最高點突破根號壓力／單一綠量的最低點跌破根號支撐。做多＝有空單先平，做空＝有多單先平，多空一定交替出現。點任一個訊號（📍）可以跳到圖上那根K，成交量會標出 ①② 是哪兩根。訊號只是參考。</div>
     </div>
     <p class="hint">由右往左，每兩個相鄰轉折點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。實線＝最靠右（最新）的一條，虛線＝更左邊的舊轉折。最右邊那段會跟著即時價格重算。</p>
   </div>
@@ -422,11 +422,27 @@
     volSignals = scanVolSignals(candles);
     signalMarkers = volSignals.map(s => ({ time: s.time, position: s.k === 'buy' ? 'belowBar' : 'aboveBar', color: s.k === 'buy' ? '#f0b90b' : '#3d8bfd', shape: 'circle', text: (s.k === 'buy' ? '多' : '空') + (s.type === '根' ? '根' : '') }));
     setAllMarkers();
-    const list = volSignals.slice(-8).reverse();
-    $('signals').innerHTML = list.length ? list.map(s => `<div><span style="color:${s.k === 'buy' ? '#f0b90b' : '#3d8bfd'};font-weight:700">${s.k === 'buy' ? '做多' : '做空'}</span><span style="color:#8b93a7">${barTime(s.time)}　收 ${fmt(s.price)}</span></div>
-      <div style="border:0;color:#8b93a7;font-size:12px"><span>${s.why}</span><span></span></div>`).join('') : '<div style="color:#8b93a7">目前還沒有訊號</div>';
+    const list = volSignals.slice(-20).reverse();
+    $('signals').innerHTML = list.length ? list.map(s => `<div data-t="${s.time}" style="cursor:pointer"><span style="color:${s.k === 'buy' ? '#f0b90b' : '#3d8bfd'};font-weight:700">${s.k === 'buy' ? '做多' : '做空'}</span><span style="color:#8b93a7">${barTime(s.time)}　收 ${fmt(s.price)}</span></div>
+      <div data-t="${s.time}" style="border:0;color:#8b93a7;font-size:12px;cursor:pointer"><span>${s.why}</span><span style="color:#5b6478;white-space:nowrap">📍</span></div>`).join('') : '<div style="color:#8b93a7">目前還沒有訊號</div>';
     return volSignals;
   }
+
+  // 點訊號 → 圖表移到那根K、成交量標出是哪幾根
+  function jumpToSignal(t) {
+    const idx = candles.findIndex(c => c.time === t);
+    const s = volSignals.find(x => x.time === t);
+    if (idx < 0 || !s) return;
+    chart.timeScale().setVisibleLogicalRange({ from: idx - 40, to: idx + 20 });
+    const col = s.k === 'buy' ? '#f0b90b' : '#3d8bfd', name = s.k === 'buy' ? '做多' : '做空';
+    const mk = s.type === '量' && idx > 0
+      ? [{ time: candles[idx - 1].time, position: 'aboveBar', color: col, shape: 'arrowDown', text: '①' },
+         { time: t, position: 'aboveBar', color: col, shape: 'arrowDown', text: '② ' + name }]
+      : [{ time: t, position: 'aboveBar', color: col, shape: 'arrowDown', text: name }];
+    volSeries.setMarkers(mk);
+    $('volChart').parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  $('signals').addEventListener('click', e => { const el = e.target.closest('[data-t]'); if (el) jumpToSignal(+el.dataset.t); });
 
   let lines = [];
   function drawLevels() {
