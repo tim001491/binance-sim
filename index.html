@@ -50,7 +50,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v17</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v18</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -252,6 +252,21 @@
     }));
   }
   const UP = '#ea3943', DN = '#16c784';
+  // 十字線同步：在任何一張圖上按住／滑動，三張圖都出現同一條垂直虛線
+  {
+    const pairs = [[chart, series, i => candles[i].close], [volChart, volSeries, i => candles[i].volume || 0], [macdChart, difSeries, i => macdCalc()[i].dif]];
+    let syncing = false;
+    pairs.forEach(([src]) => src.subscribeCrosshairMove(p => {
+      if (syncing) return;
+      syncing = true;
+      try {
+        const i = p.time != null && p.point ? candles.findIndex(c => c.time === p.time) : -1;
+        if (i < 0) { pairs.forEach(([c]) => c !== src && c.clearCrosshairPosition()); hoverIdx = null; }
+        else { pairs.forEach(([c, s, v]) => c !== src && c.setCrosshairPosition(v(i), p.time, s)); hoverIdx = i; }
+        showSubTags();
+      } finally { syncing = false; }
+    }));
+  }
   const volPoint = c => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? UP + 'b3' : DN + 'b3' });
   function macdCalc() {
     const out = [];
@@ -268,9 +283,12 @@
   }
   const oscColor = (m, prev) => m.osc >= 0 ? (prev && m.osc < prev.osc ? UP + '80' : UP) : (prev && m.osc > prev.osc ? DN + '80' : DN);
   const fmtVol = v => v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(2) + 'K' : v.toFixed(2);
-  function showSubTags(m) {
-    const c = candles.at(-1);
-    if (c) $('volTag').textContent = `成交量 ${fmtVol(c.volume || 0)}`;
+  let hoverIdx = null; // 手指／滑鼠停在哪一根（null＝最新一根）
+  function showSubTags(mLast) {
+    const i = hoverIdx != null && candles[hoverIdx] ? hoverIdx : candles.length - 1;
+    const c = candles[i];
+    const m = i === candles.length - 1 && mLast ? mLast : macdCalc()[i];
+    if (c) $('volTag').innerHTML = `成交量 <span style="color:${c.close >= c.open ? UP : DN}">${fmtVol(c.volume || 0)}</span>`;
     if (m) {
       const d = (candles.at(-1)?.close || 0) >= 100 ? 2 : 4;
       $('macdTag').innerHTML = `MACD (12,26,9)　<span style="color:#f0b90b">DIF ${m.dif.toFixed(d)}</span>　<span style="color:#3d8bfd">DEA ${m.dea.toFixed(d)}</span>　<span style="color:${m.osc >= 0 ? UP : DN}">OSC ${m.osc.toFixed(d)}</span>`;
