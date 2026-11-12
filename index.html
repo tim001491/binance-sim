@@ -50,7 +50,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v9</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v10</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -80,6 +80,8 @@
         <button id="lockBtn">🔓 自動更新價位</button>
       </div>
       <div class="levels" id="levels"></div>
+      <h2 style="margin:12px 0 6px">根號策略・現在的計畫</h2>
+      <div class="levels" id="plan"></div>
       <h2 style="margin:12px 0 6px">量價訊號（K棒收盤才判斷）</h2>
       <div class="levels" id="signals"></div>
       <div style="color:#8b93a7;font-size:11px;margin-top:6px"><b style="color:#f0b90b">● 黃＝買</b>　<b style="color:#3d8bfd">● 藍＝賣</b>　■ 灰＝小心假突破／假跌破。放量＝成交量 ≥ 前 20 根均量 1.5 倍。訊號只是參考，不保證。</div>
@@ -132,7 +134,7 @@
       </div>
       <div id="btResult" style="display:none"></div>
       <div class="log" id="btTrades" style="margin-top:8px"></div>
-      <div style="color:#8b93a7;font-size:11px;margin-top:6px"><b>新規則（根號停損＋量）</b>：買進訊號還要主動買 ≥ 55%；停損線＝進場價下方最近的橘色根號支撐線，有新的根號支撐往上出現就跟著上移。收盤跌破停損線時看量：有量（量比 ≥ 1 或主動賣 > 主動買）→ 下一根賣出；量縮 → 先不賣，3 根內沒站回才賣；盤中再跌 1.5 倍平均波動 → 立刻停損。<br><b>舊規則</b>：黃色「買」訊號 → 下一根開盤全額買進；藍色「賣」訊號 → 下一根開盤賣出；持有中跌破進場時那條線（再往下留一點空間）就停損。只做多、不加碼。幣種用上方選的；開根號設定（取最近N根、靈敏度、段數）也照下方設定。過去的結果不代表未來。</div>
+      <div style="color:#8b93a7;font-size:11px;margin-top:6px"><b style="color:#f0b90b">根號策略</b>：① 買點＝價格回測橘線站穩（紅K或長下影線；量縮回測或主動買 ≥ 55%，有量又主動賣多就不買），或有量突破紫線。② 進場前先算：到上方最近紫線的空間要 ≥ 0.4%，而且至少是停損空間的 1.5 倍，不划算就不做。③ 到紫線先賣一半，停損移到成本價；剩下的跟著新的橘線往上移。④ 停損＝收盤有量跌破橘線就賣，量縮跌破給 3 根站回；盤中跌破橘線再 1 倍平均波動直接停損。<br><b>根號停損＋量</b>：買進訊號還要主動買 ≥ 55%；停損線＝進場價下方最近的橘色根號支撐線，有新的根號支撐往上出現就跟著上移。收盤跌破停損線時看量：有量（量比 ≥ 1 或主動賣 > 主動買）→ 下一根賣出；量縮 → 先不賣，3 根內沒站回才賣；盤中再跌 1.5 倍平均波動 → 立刻停損。<br><b>舊規則</b>：黃色「買」訊號 → 下一根開盤全額買進；藍色「賣」訊號 → 下一根開盤賣出；持有中跌破進場時那條線（再往下留一點空間）就停損。只做多、不加碼。幣種用上方選的；開根號設定（取最近N根、靈敏度、段數）也照下方設定。過去的結果不代表未來。</div>
     </div>
 
     <div class="card">
@@ -469,6 +471,34 @@
       return `<div><span style="color:${LV[l.kind].color};font-weight:${l.primary ? 700 : 400}">${l.label}</span><span>${fmt(l.price)} <small style="color:#8b93a7">${dist}</small></span></div>
               <div style="border:0;color:#8b93a7;font-size:12px"><span>√(${fmt(l.a, 2)} × ${fmt(l.b, 2)})</span><span></span></div>`;
     }).join('') : '<div style="color:#8b93a7">轉折點還不夠，請把「取最近 N 根K」調大或靈敏度調高</div>';
+    renderPlan();
+  }
+  // 根號策略：橘線＝買點兼停損基準，紫線＝賣點；先算風險報酬划不划算
+  const ROOT = { minMove: 0.004, rr: 1.5 };
+  function rootPlan(lv, price, atrV, feePct) {
+    const sups = lv.filter(l => l.kind === 'sup' && l.price < price).map(l => l.price);
+    const ress = lv.filter(l => l.kind === 'res' && l.price > price * 1.002).map(l => l.price);
+    if (!sups.length) return null;
+    const buy = Math.max(...sups), hard = buy - atrV;
+    const target = ress.length ? Math.min(...ress) : null;
+    const minMove = Math.max(ROOT.minMove, 4 * feePct / 100);
+    const reward = target != null ? (target - buy) / buy : null, risk = (buy - hard) / buy;
+    const ok = target != null && reward >= minMove && reward >= ROOT.rr * risk;
+    return { buy, hard, target, reward, risk, rr: reward != null ? reward / risk : null, ok, minMove };
+  }
+  function renderPlan() {
+    const el = $('plan'); if (!el) return;
+    if (!candles.length || !lastPrice) return el.innerHTML = '';
+    const n = candles.length, atrV = candles.slice(Math.max(0, n - 15), n - 1).reduce((s, c) => s + c.high - c.low, 0) / Math.min(14, n - 1);
+    const P = rootPlan(levels, lastPrice, atrV, 0.1);
+    if (!P) return el.innerHTML = '<div style="color:#8b93a7">現價下方沒有橘色支撐線，先不進場</div>';
+    const d = x => ((x - lastPrice) / lastPrice * 100).toFixed(2) + '%';
+    el.innerHTML = `
+      <div><span style="color:#f0a020;font-weight:700">買點（回測橘線）</span><span>${fmt(P.buy)} <small style="color:#8b93a7">${d(P.buy)}</small></span></div>
+      <div><span style="color:#8b93a7">停損：收盤有量跌破橘線／盤中跌到</span><span>${fmt(P.hard)} <small style="color:#8b93a7">${d(P.hard)}</small></span></div>
+      <div><span style="color:#a970ff;font-weight:700">賣點（紫線，先賣一半）</span><span>${P.target != null ? fmt(P.target) + ' <small style="color:#8b93a7">' + d(P.target) + '</small>' : '上方沒有紫線'}</span></div>
+      <div><span>風險報酬比</span><span>${P.rr != null ? '賺 ' + (P.reward * 100).toFixed(2) + '% ／ 賠 ' + (P.risk * 100).toFixed(2) + '%（' + P.rr.toFixed(1) + ' 倍）' : '--'}</span></div>
+      <div style="border:0"><span style="font-weight:700;color:${P.ok ? '#ea3943' : '#8b93a7'}">${P.ok ? '✅ 划算：價格回到橘線、站穩又有量時可以買' : '⛔ 不划算：' + (P.target == null ? '沒有明確賣點' : P.reward < P.minMove ? '到紫線的空間太小，扣掉手續費賺不到' : '可能賺的不到可能賠的 ' + ROOT.rr + ' 倍') + '，先不做'}</span><span></span></div>`;
   }
 
   // ---------- data ----------
@@ -738,6 +768,79 @@
     if (qty) trades.push({ ...cur, exitTime: last.time, exitPx: last.close, why: '回測結束（未平倉，以收盤價計）', pnl: eqEnd - cur.cost, pct: (eqEnd - cur.cost) / cur.cost * 100, open: true });
     return { eqEnd, trades, mdd, fees, hold: (last.close / arr[26].open - 1) * 100 };
   }
+  // 根號策略回測
+  function simulateRoot(arr, lvMap, feePct) {
+    const fee = feePct / 100;
+    const atr = i => arr.slice(Math.max(0, i - 14), i).reduce((s, c) => s + c.high - c.low, 0) / Math.min(14, i);
+    let cash = START_CASH, qty = 0, pending = null, peak = START_CASH, mdd = 0, fees = 0;
+    let stopLine = 0, hard = 0, target = 0, half = false, below = null, cur = null;
+    const trades = [];
+    const sellQty = (q, px) => { const g = q * px, f = g * fee; fees += f; cash += g - f; qty -= q; };
+    const closeTrade = (i, px, why) => {
+      sellQty(qty, px); qty = 0;
+      const pnl = cash - cur.cost;
+      trades.push({ ...cur, exitTime: arr[i].time, exitPx: px, why: (half ? '已在紫線賣一半；剩下 ' : '') + why, pnl, pct: pnl / cur.cost * 100 });
+      cur = null; below = null; half = false;
+    };
+    for (let i = 26; i < arr.length; i++) {
+      const b = arr[i];
+      if (pending) {
+        if (pending.k === 'buy' && !qty) {
+          const cost = cash, f = cost * fee; fees += f;
+          qty = (cost - f) / b.open; cash = 0;
+          ({ stopLine, hard, target } = pending); half = false; below = null;
+          cur = { entryTime: b.time, entryPx: b.open, cost, reason: pending.text };
+        } else if (pending.k === 'sell' && qty) closeTrade(i, b.open, pending.text);
+        pending = null;
+      }
+      if (qty && b.low <= hard) closeTrade(i, Math.min(b.open, hard), '盤中跌到硬停損');
+      if (qty && !half && b.high >= target) {
+        sellQty(qty / 2, Math.max(b.open, target)); half = true;
+        stopLine = Math.max(stopLine, cur.entryPx); hard = Math.max(hard, cur.entryPx - atr(i));
+      }
+      const avgV = arr.slice(i - 20, i).reduce((s, c) => s + (c.volume || 0), 0) / 20;
+      const r = avgV ? b.volume / avgV : 1, br = buyRatio(b);
+      const lv = lvMap.get(i + 1) || []; // 這根收盤後看到的價位
+      if (qty) {
+        if (b.close < stopLine) {
+          if (r >= 1 || (br != null && br < 0.5)) pending = { k: 'sell', text: `收盤有量跌破 ${fmt(stopLine)}` };
+          else if (below == null) below = i;
+          else if (i - below >= 3) pending = { k: 'sell', text: `量縮跌破 ${fmt(stopLine)} 後 3 根沒站回` };
+        } else {
+          below = null;
+          if (half) { // 賣一半之後：橘線往上出現 → 停損跟著上移
+            const ups = lv.filter(l => l.kind === 'sup' && l.price < b.close).map(l => l.price);
+            if (ups.length && Math.max(...ups) > stopLine) { stopLine = Math.max(...ups); hard = Math.max(hard, stopLine - atr(i)); }
+          }
+        }
+      } else if (!pending && i + 1 < arr.length) {
+        const pc = arr[i - 1].close, a = atr(i), tol = 0.3 * a;
+        const body = Math.abs(b.close - b.open), lower = Math.min(b.open, b.close) - b.low, red = b.close > b.open;
+        const lvNow = lvMap.get(i) || [];
+        let S = null, text = '';
+        // A：回測橘線站穩（紅K或長下影線），量縮回測或主動買夠多；有量又主動賣多就不買
+        const touch = lvNow.filter(l => l.kind === 'sup' && b.low <= l.price + tol && b.close >= l.price && pc >= l.price).map(l => l.price);
+        if (touch.length && (red || lower >= body) && !(r >= 1 && br != null && br < 0.5) && (r < 1 || br == null || br >= BUY_OK)) { S = Math.max(...touch); text = `回測橘線 ${fmt(S)} 站穩`; }
+        // B：有量突破紫線（主動買 ≥ 55%），紫線變支撐
+        if (S == null) {
+          const brk = lvNow.filter(l => l.kind === 'res' && pc <= l.price && b.close > l.price).map(l => l.price);
+          if (brk.length && red && r >= BIG && (br == null || br >= BUY_OK)) { S = Math.max(...brk); text = `有量突破紫線 ${fmt(S)}`; }
+        }
+        if (S != null) {
+          const ress = lv.filter(l => l.kind === 'res' && l.price > b.close * 1.002).map(l => l.price);
+          const hd = S - a, tgt = ress.length ? Math.min(...ress) : b.close + 2 * (b.close - hd);
+          const reward = (tgt - b.close) / b.close, risk = (b.close - hd) / b.close;
+          if (reward >= Math.max(ROOT.minMove, 4 * fee) && reward >= ROOT.rr * risk)
+            pending = { k: 'buy', text, stopLine: S, hard: hd, target: tgt };
+        }
+      }
+      const eq = cash + qty * b.close;
+      peak = Math.max(peak, eq); mdd = Math.max(mdd, (peak - eq) / peak * 100);
+    }
+    const last = arr.at(-1), eqEnd = cash + qty * last.close;
+    if (qty) trades.push({ ...cur, exitTime: last.time, exitPx: last.close, why: '回測結束（未平倉，以收盤價計）', pnl: eqEnd - cur.cost, pct: (eqEnd - cur.cost) / cur.cost * 100, open: true });
+    return { eqEnd, trades, mdd, fees, hold: (last.close / arr[26].open - 1) * 100 };
+  }
   function summarize(R, R0) {
     const done = R.trades.filter(t => !t.open), wins = done.filter(t => t.pnl > 0), losses = done.filter(t => t.pnl <= 0);
     const avg = a => a.length ? a.reduce((s, t) => s + t.pct, 0) / a.length : 0;
@@ -757,26 +860,27 @@
       const sigsNew = await scanAsync(arr, t => prog('新規則 ' + t), { strict: true, lvMap });
       const O = summarize(simulate(arr, sigsOld, feePct), simulate(arr, sigsOld, 0));
       const N = summarize(simulateSqrt(arr, sigsNew, lvMap, feePct), simulateSqrt(arr, sigsNew, lvMap, 0));
+      const Q = summarize(simulateRoot(arr, lvMap, feePct), simulateRoot(arr, lvMap, 0));
       const c = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
       const pct = v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
       const res = X => `<b class="${c(X.ret)}">${X.ret >= 0 ? '賺' : '賠'} ${fmt(Math.abs(X.eq - START_CASH), 0)}<br>${pct(X.ret)}</b>`;
       const rows = [
-        ['最後結果', res(O), res(N)],
-        ['交易次數', O.n + (O.open ? '+1' : ''), N.n + (N.open ? '+1' : '')],
-        ['勝率', O.win == null ? '--' : `${O.win.toFixed(0)}%<br>${O.w}勝${O.l}敗`, N.win == null ? '--' : `${N.win.toFixed(0)}%<br>${N.w}勝${N.l}敗`],
-        ['平均賺', `<span class="pos">${pct(O.aw)}</span>`, `<span class="pos">${pct(N.aw)}</span>`],
-        ['平均賠', `<span class="neg">${pct(O.al)}</span>`, `<span class="neg">${pct(N.al)}</span>`],
-        ['最大回落', `<span class="neg">-${O.mdd.toFixed(2)}%</span>`, `<span class="neg">-${N.mdd.toFixed(2)}%</span>`],
-        ['手續費', fmt(O.fees, 0), fmt(N.fees, 0)],
-        ['不用手續費', `<span class="${c(O.ret0)}">${pct(O.ret0)}</span>`, `<span class="${c(N.ret0)}">${pct(N.ret0)}</span>`]
+        ['最後結果', ...[Q, N, O].map(res)],
+        ['交易次數', ...[Q, N, O].map(X => X.n + (X.open ? '+1' : ''))],
+        ['勝率', ...[Q, N, O].map(X => X.win == null ? '--' : `${X.win.toFixed(0)}%<br>${X.w}勝${X.l}敗`)],
+        ['平均賺', ...[Q, N, O].map(X => `<span class="pos">${pct(X.aw)}</span>`)],
+        ['平均賠', ...[Q, N, O].map(X => `<span class="neg">${pct(X.al)}</span>`)],
+        ['最大回落', ...[Q, N, O].map(X => `<span class="neg">-${X.mdd.toFixed(2)}%</span>`)],
+        ['手續費', ...[Q, N, O].map(X => fmt(X.fees, 0))],
+        ['不用手續費', ...[Q, N, O].map(X => `<span class="${c(X.ret0)}">${pct(X.ret0)}</span>`)]
       ];
       $('btResult').style.display = 'block';
       $('btResult').innerHTML = `<div style="color:#8b93a7;margin-bottom:6px">${barTime(arr[0].time)} ～ ${barTime(arr.at(-1).time)}　同期間買了放著不動：<span class="${c(O.hold)}">${pct(O.hold)}</span></div>
-        <table class="bt"><tr><th></th><th>舊規則</th><th>新規則<br><small>根號停損＋量</small></th></tr>
-        ${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')}</table>`;
+        <table class="bt"><tr><th></th><th style="color:#f0b90b">根號策略</th><th>根號停損<br><small>＋量</small></th><th>舊規則</th></tr>
+        ${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('')}</table>`;
       const list = (X, name) => `<div style="color:#8b93a7;margin-top:6px">${name}最近 20 筆：</div>` + X.trades.slice(-20).reverse().map(t =>
         `<div><span style="color:#8b93a7">${barTime(t.entryTime)}</span> ${t.reason} @ ${fmt(t.entryPx)} → ${t.why} @ ${fmt(t.exitPx)}　<b class="${c(t.pnl)}">${pct(t.pct)}</b></div>`).join('');
-      $('btTrades').innerHTML = list(N, '新規則') + list(O, '舊規則');
+      $('btTrades').innerHTML = list(Q, '根號策略') + list(N, '根號停損＋量') + list(O, '舊規則');
     } catch (e) {
       $('btResult').style.display = '';
       $('btResult').innerHTML = `<span>回測失敗</span><span class="neg">${e.message}</span>`;
