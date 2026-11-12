@@ -46,7 +46,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v13</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v14</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -79,7 +79,7 @@
       <div class="levels" id="levels"></div>
       <h2 style="margin:12px 0 6px">成交量訊號（K棒收盤才判斷）</h2>
       <div class="levels" id="signals"></div>
-      <div style="color:#8b93a7;font-size:11px;margin-top:6px">圖上 <b style="color:#f0b90b">● 買</b>／<b style="color:#3d8bfd">● 賣</b>＝連續兩根同色量、後面比前面大；<b style="color:#f0b90b">● 買根</b>／<b style="color:#3d8bfd">● 賣根</b>＝單一紅量突破根號壓力／單一綠量跌破根號支撐。買賣一定交替出現。訊號只是參考。</div>
+      <div style="color:#8b93a7;font-size:11px;margin-top:6px">多空都做：<b style="color:#f0b90b">● 多</b>／<b style="color:#3d8bfd">● 空</b>＝連續兩根同色量、後面比前面大；<b style="color:#f0b90b">● 多根</b>／<b style="color:#3d8bfd">● 空根</b>＝單一紅量的最高點突破根號壓力／單一綠量的最低點跌破根號支撐。做多＝有空單先平，做空＝有多單先平，多空一定交替出現。訊號只是參考。</div>
     </div>
     <p class="hint">由右往左，每兩個相鄰轉折點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。實線＝最靠右（最新）的一條，虛線＝更左邊的舊轉折。最右邊那段會跟著即時價格重算。</p>
   </div>
@@ -340,37 +340,39 @@
     drawLevels();
   }
   // ---------- 成交量訊號（使用者自訂規則）----------
-  // ① 主訊號：多單狀態下，第一次出現「連續兩根綠量，而且右邊綠量 > 左邊綠量」→ 賣出
-  //            空手狀態下，第一次出現「連續兩根紅量，而且右邊紅量 > 左邊紅量」→ 買進
-  // ② 搭配根號：空手時，單一紅量（前一根是綠量）那根K收盤突破紫色壓力線 → 買進
-  //            持有時，單一綠量（前一根是紅量）那根K收盤跌破橘色支撐線 → 賣出
-  // 買、賣一定交替出現；只看已收盤的K棒；根號價位用該K棒之前的資料算（不偷看未來）
+  // 多空都做：買進訊號＝做多（有空單先平），賣出訊號＝做空（有多單先平）
+  // ① 主訊號：做多中，第一次出現「連續兩根綠量，而且右邊綠量 > 左邊綠量」→ 做空
+  //            做空中，第一次出現「連續兩根紅量，而且右邊紅量 > 左邊紅量」→ 做多
+  // ② 搭配根號（看上下影線的高低點）：
+  //            做空中，單一紅量（前一根是綠量）那根K的最高點突破紫色壓力線 → 做多
+  //            做多中，單一綠量（前一根是紅量）那根K的最低點跌破橘色支撐線 → 做空
+  // 多空一定交替出現；只看已收盤的K棒；根號價位用該K棒之前的資料算（不偷看未來）
   let pivotMarkers = [], signalMarkers = [], volSignals = [];
   const setAllMarkers = () => series.setMarkers([...pivotMarkers, ...signalMarkers].sort((a, b) => a.time - b.time));
   const isRed = c => c.close >= c.open;
   function scanVolSignals(arr) {
     const out = [];
-    let state = null; // 'long' 持有、'flat' 空手、null 還沒有訊號
+    let state = null; // 'long' 做多中、'short' 做空中、null 還沒有訊號
     const end = arr.length - 1; // 最後一根還沒收盤
     for (let i = 2; i < end; i++) {
       const a = arr[i - 1], b = arr[i], pc = a.close;
       let sig = null;
-      if (state !== 'flat' && !isRed(a) && !isRed(b) && b.volume > a.volume)
+      if (state !== 'short' && !isRed(a) && !isRed(b) && b.volume > a.volume)
         sig = { k: 'sell', type: '量', why: `連續兩根綠量，後面比前面大（${fmtVol(a.volume)} → ${fmtVol(b.volume)}）` };
       else if (state !== 'long' && isRed(a) && isRed(b) && b.volume > a.volume)
         sig = { k: 'buy', type: '量', why: `連續兩根紅量，後面比前面大（${fmtVol(a.volume)} → ${fmtVol(b.volume)}）` };
       else if (state !== null && isRed(b) !== isRed(a)) {
         const lv = levelsFrom(arr.slice(Math.max(0, i - 1000), i));
-        if (state === 'flat' && isRed(b)) {
-          const hit = lv.filter(l => l.kind === 'res' && pc <= l.price && b.close > l.price).map(l => l.price);
-          if (hit.length) sig = { k: 'buy', type: '根', why: `單一紅量，收盤突破根號壓力 ${fmt(Math.max(...hit))}` };
+        if (state === 'short' && isRed(b)) {
+          const hit = lv.filter(l => l.kind === 'res' && pc <= l.price && b.high > l.price).map(l => l.price);
+          if (hit.length) sig = { k: 'buy', type: '根', why: `單一紅量，最高點 ${fmt(b.high)} 突破根號壓力 ${fmt(Math.min(...hit))}` };
         } else if (state === 'long' && !isRed(b)) {
-          const hit = lv.filter(l => l.kind === 'sup' && pc >= l.price && b.close < l.price).map(l => l.price);
-          if (hit.length) sig = { k: 'sell', type: '根', why: `單一綠量，收盤跌破根號支撐 ${fmt(Math.min(...hit))}` };
+          const hit = lv.filter(l => l.kind === 'sup' && pc >= l.price && b.low < l.price).map(l => l.price);
+          if (hit.length) sig = { k: 'sell', type: '根', why: `單一綠量，最低點 ${fmt(b.low)} 跌破根號支撐 ${fmt(Math.max(...hit))}` };
         }
       }
       if (!sig) continue;
-      state = sig.k === 'buy' ? 'long' : 'flat';
+      state = sig.k === 'buy' ? 'long' : 'short';
       out.push({ ...sig, i, time: b.time, price: b.close });
     }
     return out;
@@ -378,10 +380,10 @@
   const barTime = t => { const d = new Date((t - TZ) * 1000); return d.toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); };
   function computeVolSignals() {
     volSignals = scanVolSignals(candles);
-    signalMarkers = volSignals.map(s => ({ time: s.time, position: s.k === 'buy' ? 'belowBar' : 'aboveBar', color: s.k === 'buy' ? '#f0b90b' : '#3d8bfd', shape: 'circle', text: (s.k === 'buy' ? '買' : '賣') + (s.type === '根' ? '根' : '') }));
+    signalMarkers = volSignals.map(s => ({ time: s.time, position: s.k === 'buy' ? 'belowBar' : 'aboveBar', color: s.k === 'buy' ? '#f0b90b' : '#3d8bfd', shape: 'circle', text: (s.k === 'buy' ? '多' : '空') + (s.type === '根' ? '根' : '') }));
     setAllMarkers();
     const list = volSignals.slice(-8).reverse();
-    $('signals').innerHTML = list.length ? list.map(s => `<div><span style="color:${s.k === 'buy' ? '#f0b90b' : '#3d8bfd'};font-weight:700">${s.k === 'buy' ? '買進' : '賣出'}</span><span style="color:#8b93a7">${barTime(s.time)}　收 ${fmt(s.price)}</span></div>
+    $('signals').innerHTML = list.length ? list.map(s => `<div><span style="color:${s.k === 'buy' ? '#f0b90b' : '#3d8bfd'};font-weight:700">${s.k === 'buy' ? '做多' : '做空'}</span><span style="color:#8b93a7">${barTime(s.time)}　收 ${fmt(s.price)}</span></div>
       <div style="border:0;color:#8b93a7;font-size:12px"><span>${s.why}</span><span></span></div>`).join('') : '<div style="color:#8b93a7">目前還沒有訊號</div>';
     return volSignals;
   }
@@ -442,7 +444,7 @@
       if (!isNew) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); }
       if (isNew && last) {
         const sg = computeVolSignals().at(-1);
-        if (sg && sg.time === last.time) alertUser(`${sg.k === 'buy' ? '買進' : '賣出'}訊號：${sg.why}`);
+        if (sg && sg.time === last.time) alertUser(`${sg.k === 'buy' ? '做多（平空）' : '做空（平多）'}訊號：${sg.why}`);
       }
       series.update(c);
       updateSubData();
