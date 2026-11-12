@@ -50,7 +50,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v21</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v22</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -100,7 +100,7 @@
         </select>
       </div>
       <div class="row">
-        <label>由右往左換算</label><input id="count" type="number" min="1" max="10" value="4"><label>段</label>
+        <label>由右往左換算</label><input id="count" type="number" min="1" max="10" value="2"><label>段</label>
       </div>
     </div>
 
@@ -165,8 +165,9 @@
   };
   const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','lev','sl','maxTrades'];
   const saved = store.get('sqrt_settings', {});
+  if (!saved.countV2) { delete saved.count; saved.countV2 = 1; } // 預設改成只顯示 2 段
   SETTING_IDS.forEach(id => { if (saved[id] != null) $(id).value = saved[id]; if ($(id).tagName === 'SELECT' && !$(id).value) $(id).selectedIndex = id === 'step' ? 1 : 0; });
-  const saveSettings = () => store.set('sqrt_settings', Object.fromEntries(SETTING_IDS.map(id => [id, $(id).value])));
+  const saveSettings = () => store.set('sqrt_settings', { ...Object.fromEntries(SETTING_IDS.map(id => [id, $(id).value])), countV2: 1 });
 
   const FFEE = 0.0005; // 合約手續費（單邊）
   let acct = store.get('sqrt_fut_acct', null) || newAcct();
