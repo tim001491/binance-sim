@@ -46,7 +46,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v11</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v12</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -59,6 +59,7 @@
     <option value="15m">15分K</option>
     <option value="1h">60分K</option>
     <option value="4h">4小時K</option>
+    <option value="1d">日K</option>
   </select>
   <span class="price" id="price">--</span>
   <span class="status"><span class="dot" id="dot"></span><span id="conn">連線中…</span></span>
@@ -384,7 +385,7 @@
       setConn(false, '斷線，重新連線中…');
       wsTimer = setTimeout(() => connect(sym, itv, my), Math.min(30000, 1000 * 2 ** retry++));
     };
-    ws.onerror = () => ws.close();
+    const sock = ws; ws.onerror = () => { try { sock.close(); } catch {} };
   }
   function setConn(live, text) { $('dot').className = 'dot' + (live ? ' live' : ''); $('conn').textContent = text; }
   function showPrice() { $('price').textContent = fmt(lastPrice); }
