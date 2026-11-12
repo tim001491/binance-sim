@@ -24,7 +24,7 @@
   #chart{height:440px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   @media(max-width:600px){#chart{height:360px}}
   .sub{position:relative;margin-top:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  #volChart{height:110px} #macdChart{height:150px}
+  #volChart{height:130px} #macdChart{height:150px}
   .sub .tag{position:absolute;left:8px;top:4px;z-index:3;font-size:11px;color:var(--mute);pointer-events:none;font-variant-numeric:tabular-nums}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
   .card h2{font-size:13px;margin:0 0 8px;color:var(--mute);font-weight:600;letter-spacing:.03em}
@@ -46,7 +46,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v5</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v6</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -76,6 +76,9 @@
         <button id="lockBtn">🔓 自動更新價位</button>
       </div>
       <div class="levels" id="levels"></div>
+      <h2 style="margin:12px 0 6px">量價訊號（K棒收盤才判斷）</h2>
+      <div class="levels" id="signals"></div>
+      <div style="color:#8b93a7;font-size:11px;margin-top:6px"><b style="color:#f0b90b">● 黃＝買</b>　<b style="color:#3d8bfd">● 藍＝賣</b>　■ 灰＝小心假突破／假跌破。放量＝成交量 ≥ 前 20 根均量 1.5 倍。訊號只是參考，不保證。</div>
     </div>
     <p class="hint">由右往左，每兩個相鄰轉折點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。實線＝最靠右（最新）的一條，虛線＝更左邊的舊轉折。最右邊那段會跟著即時價格重算。</p>
   </div>
@@ -192,7 +195,9 @@
     handleScroll: true, handleScale: true
   });
   const volChart = LWC.createChart($('volChart'), subOpts(false));
+  volChart.applyOptions({ rightPriceScale: { scaleMargins: { top: 0.3, bottom: 0.02 } } });
   const volSeries = volChart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: true });
+  const volMaSeries = volChart.addLineSeries({ color: '#f0b90b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
   const macdChart = LWC.createChart($('macdChart'), subOpts(true));
   const oscSeries = macdChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
   const difSeries = macdChart.addLineSeries({ color: '#f0b90b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
@@ -224,9 +229,18 @@
   }
   const oscColor = (m, prev) => m.osc >= 0 ? (prev && m.osc < prev.osc ? UP + '80' : UP) : (prev && m.osc > prev.osc ? DN + '80' : DN);
   const fmtVol = v => v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(2) + 'K' : v.toFixed(2);
+  function volMa(i) {
+    if (i < 20) return null;
+    let s = 0; for (let j = i - 19; j <= i; j++) s += candles[j].volume || 0;
+    return s / 20;
+  }
   function showSubTags(m) {
-    const c = candles.at(-1);
-    if (c) $('volTag').textContent = `成交量 ${fmtVol(c.volume || 0)}`;
+    const c = candles.at(-1), n = candles.length;
+    if (c) {
+      const ma = n > 21 ? candles.slice(-21, -1).reduce((s, x) => s + (x.volume || 0), 0) / 20 : null;
+      let rv = 0, gv = 0; candles.slice(-20).forEach(x => x.close >= x.open ? rv += x.volume || 0 : gv += x.volume || 0);
+      $('volTag').innerHTML = `成交量 <span style="color:${c.close >= c.open ? UP : DN}">${fmtVol(c.volume || 0)}</span>　<span style="color:#f0b90b">均量20 ${ma ? fmtVol(ma) : '--'}</span>${ma ? `　量比 ${((c.volume || 0) / ma).toFixed(1)}` : ''}<br>近20根 <span style="color:${UP}">紅量 ${fmtVol(rv)}</span> ／ <span style="color:${DN}">綠量 ${fmtVol(gv)}</span>`;
+    }
     if (m) {
       const d = (candles.at(-1)?.close || 0) >= 100 ? 2 : 4;
       $('macdTag').innerHTML = `MACD (12,26,9)　<span style="color:#f0b90b">DIF ${m.dif.toFixed(d)}</span>　<span style="color:#3d8bfd">DEA ${m.dea.toFixed(d)}</span>　<span style="color:${m.osc >= 0 ? UP : DN}">OSC ${m.osc.toFixed(d)}</span>`;
@@ -234,6 +248,7 @@
   }
   function setSubData() {
     volSeries.setData(candles.map(volPoint));
+    volMaSeries.setData(candles.map((c, i) => ({ time: c.time, value: volMa(i) })).filter(x => x.value != null));
     const m = macdCalc();
     oscSeries.setData(m.map((x, i) => ({ time: x.time, value: x.osc, color: oscColor(x, m[i - 1]) })));
     difSeries.setData(m.map(x => ({ time: x.time, value: x.dif })));
@@ -243,6 +258,7 @@
   function updateSubData() {
     const c = candles.at(-1); if (!c) return;
     volSeries.update(volPoint(c));
+    const ma = volMa(candles.length - 1); if (ma != null) volMaSeries.update({ time: c.time, value: ma });
     const m = macdCalc(), x = m.at(-1);
     oscSeries.update({ time: x.time, value: x.osc, color: oscColor(x, m.at(-2)) });
     difSeries.update({ time: x.time, value: x.dif });
@@ -303,24 +319,96 @@
     }
     return piv;
   }
-  function calcLevels() {
-    if (!candles.length) return;
+  // 用某一段K線算出開根號價位（訊號回測也用同一套算法）
+  function levelsFrom(arr) {
     const n = Math.max(20, +$('lookback').value || 100);
-    const slice = candles.slice(-n);
+    const slice = arr.slice(-n);
     const piv = findPivots(slice, +$('step').value || 5);
     // 由右至左：相鄰兩個轉折點相乘開根號，依走勢方向自動分色
     // 下跌段（左高→右低）＝紫線 壓力／賣出參考；上漲段（左低→右高）＝橘線 支撐／停損
     const cnt = Math.min(10, Math.max(1, +$('count').value || 4));
-    levels = [];
-    const seen = {};
+    const out = [], seen = {};
     for (let i = piv.length - 2, rank = 1; i >= 0 && rank <= cnt; i--, rank++) {
       const A = piv[i], B = piv[i + 1], kind = A.type === 'H' ? 'res' : 'sup';
-      levels.push({ kind, rank, primary: !seen[kind], price: Math.sqrt(A.price * B.price), a: A.price, b: B.price, label: `${rank}. ${LV[kind].label}` });
+      out.push({ kind, rank, primary: !seen[kind], price: Math.sqrt(A.price * B.price), a: A.price, b: B.price, label: `${rank}. ${LV[kind].label}` });
       seen[kind] = true;
     }
-    const used = piv.slice(Math.max(0, piv.length - 1 - levels.length));
-    series.setMarkers(used.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 2) + (p.live ? '（即時）' : '') })));
+    return { levels: out, piv };
+  }
+  let pivotMarkers = [], signalMarkers = [], signals = [];
+  const setAllMarkers = () => series.setMarkers([...pivotMarkers, ...signalMarkers].sort((a, b) => a.time - b.time));
+  function calcLevels() {
+    if (!candles.length) return;
+    const r = levelsFrom(candles);
+    levels = r.levels;
+    const used = r.piv.slice(Math.max(0, r.piv.length - 1 - levels.length));
+    pivotMarkers = used.map(p => ({ time: p.time, position: p.type === 'H' ? 'aboveBar' : 'belowBar', color: p.type === 'H' ? '#ea3943' : '#16c784', shape: p.type === 'H' ? 'arrowDown' : 'arrowUp', text: fmt(p.price, 2) + (p.live ? '（即時）' : '') }));
+    setAllMarkers();
     drawLevels();
+  }
+
+  // ---------- 量價訊號：支撐／壓力 × 成交量 ----------
+  // 只看「已收盤」的K棒；價位用該K棒之前的資料算（跟當下即時看到的一樣，不偷看未來）
+  // 放量＝成交量 ≥ 前20根均量 1.5 倍；量縮＝低於均量
+  const SIG_BARS = 150, BIG = 1.5;
+  const SIG = { buy: { color: '#f0b90b', pos: 'belowBar' }, sell: { color: '#3d8bfd', pos: 'aboveBar' }, warn: { color: '#8b93a7' } };
+  function computeSignals() {
+    const out = [], pend = [], last = {};
+    const end = candles.length - 1; // 最後一根還沒收盤，不判斷
+    for (let i = Math.max(25, end - SIG_BARS); i < end; i++) {
+      const b = candles[i], pc = candles[i - 1].close;
+      const prev20 = candles.slice(i - 20, i);
+      const avgV = prev20.reduce((s, c) => s + (c.volume || 0), 0) / 20;
+      const r = avgV ? (b.volume || 0) / avgV : 1;
+      const tol = 0.3 * candles.slice(i - 14, i).reduce((s, c) => s + c.high - c.low, 0) / 14;
+      const red = b.close > b.open, green = b.close < b.open;
+      const body = Math.abs(b.close - b.open), upper = b.high - Math.max(b.open, b.close);
+      const vt = `量比 ${r.toFixed(1)} 倍`;
+      let sig = null;
+      // 先檢查前 3 根內的「量縮跌破／無量突破」有沒有變成假的
+      for (const p of pend) {
+        if (i - p.i > 3) continue;
+        if (p.t === 'weakDown' && b.close > p.price && red && r >= BIG) { sig = { k: 'buy', text: '買 假跌破', why: `量縮跌破 ${fmt(p.price)} 後，紅K放量拉回站上（${vt}）` }; p.done = true; break; }
+        if (p.t === 'weakUp' && b.close < p.price) { sig = { k: 'sell', text: '賣 假突破', why: `無量突破 ${fmt(p.price)} 後又跌回壓力下（${vt}）` }; p.done = true; break; }
+      }
+      if (!sig) {
+        const lv = levelsFrom(candles.slice(0, i)).levels;
+        for (const l of lv) {
+          const P = l.price, name = `${l.kind === 'sup' ? '支撐' : '壓力'} ${fmt(P)}`;
+          if (l.kind === 'sup') {
+            if (pc >= P && b.close < P) {
+              if (green && r >= BIG) sig = { k: 'sell', text: '賣 跌破', why: `綠K放量收破${name}（${vt}）` };
+              else if (r < 1) { sig = { k: 'warn', pos: 'belowBar', text: '?量縮跌破', why: `量縮跌破${name}，小心是假跌破（${vt}）` }; pend.push({ t: 'weakDown', price: P, i }); }
+            } else if (pc > P && b.low <= P + tol && b.close > P && red && r >= BIG) {
+              sig = { k: 'buy', text: '買 撐住', why: `回測${name}沒破，紅K放量（${vt}）` };
+            }
+          } else {
+            if (pc <= P && b.close > P) {
+              if (red && r >= BIG) sig = { k: 'buy', text: '買 突破', why: `紅K放量收上${name}（${vt}）` };
+              else if (r < 1) { sig = { k: 'warn', pos: 'aboveBar', text: '?無量突破', why: `無量突破${name}，小心是假突破（${vt}）` }; pend.push({ t: 'weakUp', price: P, i }); }
+            } else if (pc < P && b.high >= P - tol && b.close < P && (green || (upper >= body && r < 1))) {
+              sig = { k: 'sell', text: '賣 壓力', why: `碰到${name}被擋下（${green ? '收綠K' : '長上影線、量縮'}，${vt}）` };
+            }
+          }
+          if (sig) break;
+        }
+      }
+      if (!sig) continue;
+      if (last[sig.text] != null && i - last[sig.text] <= 3) continue; // 同一種訊號 3 根內不重複
+      last[sig.text] = i;
+      out.push({ ...sig, time: b.time, i, price: b.close });
+    }
+    signals = out;
+    signalMarkers = out.map(s => ({ time: s.time, position: s.pos || SIG[s.k].pos, color: SIG[s.k].color, shape: s.k === 'warn' ? 'square' : 'circle', text: s.k === 'buy' ? '買' : s.k === 'sell' ? '賣' : '?' }));
+    setAllMarkers();
+    renderSignals();
+    return out;
+  }
+  const barTime = t => { const d = new Date((t - TZ) * 1000); return d.toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); };
+  function renderSignals() {
+    const list = signals.slice(-6).reverse();
+    $('signals').innerHTML = list.length ? list.map(s => `<div><span style="color:${SIG[s.k].color};font-weight:700">${s.text}</span><span style="color:#8b93a7">${barTime(s.time)}　收 ${fmt(s.price)}</span></div>
+      <div style="border:0;color:#8b93a7;font-size:12px"><span>${s.why}</span><span></span></div>`).join('') : '<div style="color:#8b93a7">最近沒有量價訊號</div>';
   }
   let lines = [];
   function drawLevels() {
@@ -358,6 +446,7 @@
       lastPrice = candles.at(-1).close;
       showPrice();
       calcLevels();
+      computeSignals();
       chart.timeScale().scrollToRealTime();
       connect(sym, itv, my);
     } catch (e) {
@@ -373,9 +462,15 @@
       const k = JSON.parse(ev.data).k; if (!k) return;
       const c = { time: k.t / 1000 + TZ, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
       const last = candles.at(-1);
-      if (last && last.time === c.time) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); }
+      const isNew = !(last && last.time === c.time);
+      if (!isNew) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); }
       series.update(c);
       updateSubData();
+      if (isNew && last) {
+        // 上一根剛收盤 → 重新判斷量價訊號，剛收盤那根有訊號就提醒
+        const sig = computeSignals().at(-1);
+        if (sig && sig.time === last.time) alertUser(`${sig.text}：${sig.why}`);
+      }
       onPrice(c.close);
       if (!locked) calcLevels();
     };
@@ -507,7 +602,7 @@
     else { $('resetBtn').dataset.confirm = 1; $('resetBtn').textContent = '再按一次確認'; setTimeout(() => { delete $('resetBtn').dataset.confirm; $('resetBtn').textContent = '重設帳戶'; }, 3000); }
   };
   ['symbol', 'interval'].forEach(id => $(id).onchange = () => { saveSettings(); load(); });
-  ['lookback', 'step', 'count'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
+  ['lookback', 'step', 'count'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); computeSignals(); });
   ['tradeSize', 'strategy', 'sl', 'maxTrades'].forEach(id => $(id).onchange = saveSettings);
 
   $('log').innerHTML = acct.log.map(x => `<div>${x}</div>`).join('');
