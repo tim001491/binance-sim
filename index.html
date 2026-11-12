@@ -34,6 +34,10 @@
   .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-variant-numeric:tabular-nums}
   .kv span:nth-child(odd){color:var(--mute)}
   .kv span:nth-child(even){text-align:right}
+  table.bt{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+  table.bt td,table.bt th{padding:6px 4px;border-bottom:1px dashed var(--line);text-align:right;vertical-align:top}
+  table.bt td:first-child,table.bt th:first-child{text-align:left;color:var(--mute)}
+  table.bt th{color:var(--text);font-weight:600}
   .pos{color:#ea3943} .neg{color:#16c784}  /* 台灣習慣：賺＝紅、賠＝綠 */
   .levels{font-variant-numeric:tabular-nums;font-size:13px;max-height:220px;overflow:auto}
   .levels div{display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px dashed var(--line)}
@@ -46,7 +50,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v8</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v9</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -126,9 +130,9 @@
       <div class="row">
         <button id="btBtn">▶ 開始回測</button>
       </div>
-      <div class="kv" id="btResult" style="display:none"></div>
+      <div id="btResult" style="display:none"></div>
       <div class="log" id="btTrades" style="margin-top:8px"></div>
-      <div style="color:#8b93a7;font-size:11px;margin-top:6px">規則：黃色「買」訊號 → 下一根開盤全額買進；藍色「賣」訊號 → 下一根開盤賣出；持有中跌破進場時那條線（再往下留一點空間）就停損。只做多、不加碼。幣種用上方選的；開根號設定（取最近N根、靈敏度、段數）也照下方設定。過去的結果不代表未來。</div>
+      <div style="color:#8b93a7;font-size:11px;margin-top:6px"><b>新規則（根號停損＋量）</b>：買進訊號還要主動買 ≥ 55%；停損線＝進場價下方最近的橘色根號支撐線，有新的根號支撐往上出現就跟著上移。收盤跌破停損線時看量：有量（量比 ≥ 1 或主動賣 > 主動買）→ 下一根賣出；量縮 → 先不賣，3 根內沒站回才賣；盤中再跌 1.5 倍平均波動 → 立刻停損。<br><b>舊規則</b>：黃色「買」訊號 → 下一根開盤全額買進；藍色「賣」訊號 → 下一根開盤賣出；持有中跌破進場時那條線（再往下留一點空間）就停損。只做多、不加碼。幣種用上方選的；開根號設定（取最近N根、靈敏度、段數）也照下方設定。過去的結果不代表未來。</div>
     </div>
 
     <div class="card">
@@ -268,7 +272,7 @@
     if (c) {
       const ma = n > 21 ? candles.slice(-21, -1).reduce((s, x) => s + (x.volume || 0), 0) / 20 : null;
       let rv = 0, gv = 0; candles.slice(-20).forEach(x => x.close >= x.open ? rv += x.volume || 0 : gv += x.volume || 0);
-      $('volTag').innerHTML = `成交量 <span style="color:${c.close >= c.open ? UP : DN}">${fmtVol(c.volume || 0)}</span>　<span style="color:#f0b90b">均量20 ${ma ? fmtVol(ma) : '--'}</span>${ma ? `　量比 ${((c.volume || 0) / ma).toFixed(1)}` : ''}<br>近20根 <span style="color:${UP}">紅量 ${fmtVol(rv)}</span> ／ <span style="color:${DN}">綠量 ${fmtVol(gv)}</span>`;
+      $('volTag').innerHTML = `成交量 <span style="color:${c.close >= c.open ? UP : DN}">${fmtVol(c.volume || 0)}</span>　<span style="color:#f0b90b">均量20 ${ma ? fmtVol(ma) : '--'}</span>${ma ? `　量比 ${((c.volume || 0) / ma).toFixed(1)}` : ''}${buyRatio(c) != null ? `　主動買 <span style="color:${buyRatio(c) >= 0.5 ? UP : DN}">${(buyRatio(c) * 100).toFixed(0)}%</span>` : ''}<br>近20根 <span style="color:${UP}">紅量 ${fmtVol(rv)}</span> ／ <span style="color:${DN}">綠量 ${fmtVol(gv)}</span>`;
     }
     if (m) {
       const d = (candles.at(-1)?.close || 0) >= 100 ? 2 : 4;
@@ -381,7 +385,10 @@
   // 放量＝成交量 ≥ 前20根均量 1.5 倍；量縮＝低於均量
   const SIG_BARS = 150, BIG = 1.5;
   const SIG = { buy: { color: '#f0b90b', pos: 'belowBar' }, sell: { color: '#3d8bfd', pos: 'aboveBar' }, warn: { color: '#8b93a7' } };
-  function scanSignals(arr, start, end) {
+  // 主動買比例＝主動買入量 ÷ 總量（幣安K線內建）；> 50% 代表買方比較積極
+  const buyRatio = c => c.volume > 0 && c.buyVol != null && !isNaN(c.buyVol) ? c.buyVol / c.volume : null;
+  const BUY_OK = 0.55;
+  function scanSignals(arr, start, end, opt = {}) {
     const out = [], pend = [], last = {};
     for (let i = Math.max(25, start); i < end; i++) {
       const b = arr[i], pc = arr[i - 1].close;
@@ -391,28 +398,31 @@
       const tol = 0.3 * arr.slice(i - 14, i).reduce((s, c) => s + c.high - c.low, 0) / 14;
       const red = b.close > b.open, green = b.close < b.open;
       const body = Math.abs(b.close - b.open), upper = b.high - Math.max(b.open, b.close);
-      const vt = `量比 ${r.toFixed(1)} 倍`;
+      const br = buyRatio(b);
+      const vt = `量比 ${r.toFixed(1)} 倍` + (br != null ? `，主動買 ${(br * 100).toFixed(0)}%` : '');
+      const buyerOk = !opt.strict || br == null || br >= BUY_OK; // 新規則：買進還要主動買 ≥ 55%
+      const lv = levelsFrom(arr.slice(Math.max(0, i - 1000), i)).levels;
+      if (opt.lvMap) opt.lvMap.set(i, lv);
       let sig = null;
       // 先檢查前 3 根內的「量縮跌破／無量突破」有沒有變成假的
       for (const p of pend) {
         if (i - p.i > 3) continue;
-        if (p.t === 'weakDown' && b.close > p.price && red && r >= BIG) { sig = { k: 'buy', lvl: p.price, text: '買 假跌破', why: `量縮跌破 ${fmt(p.price)} 後，紅K放量拉回站上（${vt}）` }; p.done = true; break; }
+        if (p.t === 'weakDown' && b.close > p.price && red && r >= BIG && buyerOk) { sig = { k: 'buy', lvl: p.price, text: '買 假跌破', why: `量縮跌破 ${fmt(p.price)} 後，紅K放量拉回站上（${vt}）` }; p.done = true; break; }
         if (p.t === 'weakUp' && b.close < p.price) { sig = { k: 'sell', text: '賣 假突破', why: `無量突破 ${fmt(p.price)} 後又跌回壓力下（${vt}）` }; p.done = true; break; }
       }
       if (!sig) {
-        const lv = levelsFrom(arr.slice(Math.max(0, i - 1000), i)).levels;
         for (const l of lv) {
           const P = l.price, name = `${l.kind === 'sup' ? '支撐' : '壓力'} ${fmt(P)}`;
           if (l.kind === 'sup') {
             if (pc >= P && b.close < P) {
               if (green && r >= BIG) sig = { k: 'sell', lvl: P, text: '賣 跌破', why: `綠K放量收破${name}（${vt}）` };
               else if (r < 1) { sig = { k: 'warn', pos: 'belowBar', text: '?量縮跌破', why: `量縮跌破${name}，小心是假跌破（${vt}）` }; pend.push({ t: 'weakDown', price: P, i }); }
-            } else if (pc > P && b.low <= P + tol && b.close > P && red && r >= BIG) {
+            } else if (pc > P && b.low <= P + tol && b.close > P && red && r >= BIG && buyerOk) {
               sig = { k: 'buy', lvl: P, text: '買 撐住', why: `回測${name}沒破，紅K放量（${vt}）` };
             }
           } else {
             if (pc <= P && b.close > P) {
-              if (red && r >= BIG) sig = { k: 'buy', lvl: P, text: '買 突破', why: `紅K放量收上${name}（${vt}）` };
+              if (red && r >= BIG && buyerOk) sig = { k: 'buy', lvl: P, text: '買 突破', why: `紅K放量收上${name}（${vt}）` };
               else if (r < 1) { sig = { k: 'warn', pos: 'aboveBar', text: '?無量突破', why: `無量突破${name}，小心是假突破（${vt}）` }; pend.push({ t: 'weakUp', price: P, i }); }
             } else if (pc < P && b.high >= P - tol && b.close < P && (green || (upper >= body && r < 1))) {
               sig = { k: 'sell', text: '賣 壓力', why: `碰到${name}被擋下（${green ? '收綠K' : '長上影線、量縮'}，${vt}）` };
@@ -473,7 +483,7 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
       if (my !== gen) return;
-      candles = data.map(k => ({ time: k[0] / 1000 + TZ, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
+      candles = data.map(k => ({ time: k[0] / 1000 + TZ, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5], buyVol: +k[9] }));
       series.setData(candles);
       setSubData();
       lastPrice = candles.at(-1).close;
@@ -493,7 +503,7 @@
     ws.onmessage = ev => {
       if (my !== gen) return;
       const k = JSON.parse(ev.data).k; if (!k) return;
-      const c = { time: k.t / 1000 + TZ, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
+      const c = { time: k.t / 1000 + TZ, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v, buyVol: +k.V };
       const last = candles.at(-1);
       const isNew = !(last && last.time === c.time);
       if (!isNew) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); }
@@ -625,19 +635,19 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
       if (!data.length) break;
-      out = data.map(k => ({ time: k[0] / 1000 + TZ, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })).concat(out);
+      out = data.map(k => ({ time: k[0] / 1000 + TZ, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5], buyVol: +k[9] })).concat(out);
       end = data[0][0] - 1;
       onProg && onProg(`下載K線 ${out.length}/${total}…`);
       if (data.length < lim) break;
     }
     return out;
   }
-  async function scanAsync(arr, onProg) {
+  async function scanAsync(arr, onProg, opt = {}) {
     const end = arr.length - 1, out = [];
     // 分段算，避免畫面卡住；分段時把前面「量縮跌破／無量突破」的狀態也接起來 → 直接整段重算前 30 根重疊
     const CH = 400;
     for (let s0 = 25; s0 < end; s0 += CH) {
-      const from = Math.max(25, s0 - 30), part = scanSignals(arr, from, Math.min(end, s0 + CH));
+      const from = Math.max(25, s0 - 30), part = scanSignals(arr, from, Math.min(end, s0 + CH), opt);
       part.forEach(x => { if (x.i >= s0 && !(out.length && out.at(-1).i === x.i)) out.push(x); });
       onProg && onProg(`計算訊號 ${Math.min(end, s0 + CH)}/${end}…`);
       await new Promise(r => setTimeout(r));
@@ -680,6 +690,60 @@
     if (qty) trades.push({ ...cur, exitTime: last.time, exitPx: last.close, why: '回測結束（未平倉，以收盤價計）', pnl: qty * last.close - cur.cost, pct: (qty * last.close - cur.cost) / cur.cost * 100, open: true });
     return { eqEnd, trades, mdd, fees, hold: (last.close / arr[26].open - 1) * 100 };
   }
+  // 新規則：以「開根號支撐／停損線」為停損基準，再用成交量判斷跌破是真是假
+  function simulateSqrt(arr, sigs, lvMap, feePct) {
+    const fee = feePct / 100, bySig = new Map(sigs.map(x => [x.i, x]));
+    const atr = i => arr.slice(Math.max(0, i - 14), i).reduce((s, c) => s + c.high - c.low, 0) / Math.min(14, i);
+    const supBelow = (i, px) => { const lv = lvMap.get(i); if (!lv) return null; const c = lv.filter(l => l.kind === 'sup' && l.price < px).map(l => l.price); return c.length ? Math.max(...c) : null; };
+    let cash = START_CASH, qty = 0, pending = null, peak = START_CASH, mdd = 0, fees = 0, stopLine = 0, hard = 0, below = null, cur = null;
+    const trades = [];
+    const exit = (i, px, why) => {
+      const gross = qty * px, f = gross * fee; fees += f; cash = gross - f;
+      const pnl = cash - cur.cost;
+      trades.push({ ...cur, exitTime: arr[i].time, exitPx: px, why, pnl, pct: pnl / cur.cost * 100 });
+      qty = 0; cur = null; below = null;
+    };
+    for (let i = 26; i < arr.length; i++) {
+      const b = arr[i];
+      if (pending) {
+        if (pending.k === 'buy' && !qty) {
+          const cost = cash, f = cost * fee; fees += f;
+          qty = (cost - f) / b.open; cash = 0;
+          stopLine = supBelow(pending.i, b.open) ?? (pending.lvl - pending.tol);
+          hard = stopLine - 1.5 * atr(i);
+          cur = { entryTime: b.time, entryPx: b.open, cost, reason: pending.text };
+        } else if (pending.k === 'sell' && qty) exit(i, b.open, pending.text);
+        pending = null;
+      }
+      if (qty && b.low <= hard) exit(i, Math.min(b.open, hard), '硬停損（跌破根號停損再 1.5 倍波動）');
+      if (qty) {
+        const avgV = arr.slice(i - 20, i).reduce((s, c) => s + (c.volume || 0), 0) / 20;
+        const r = avgV ? b.volume / avgV : 1, br = buyRatio(b);
+        if (b.close < stopLine) {
+          if (r >= 1 || (br != null && br < 0.5)) pending = { k: 'sell', text: `有量跌破根號停損 ${fmt(stopLine)}` };
+          else if (below == null) below = i;
+          else if (i - below >= 3) pending = { k: 'sell', text: `量縮跌破 ${fmt(stopLine)} 後 3 根沒站回` };
+        } else {
+          below = null;
+          const up = supBelow(i, b.close); // 新的根號支撐往上移 → 停損跟著上移
+          if (up != null && up > stopLine) { stopLine = up; hard = Math.max(hard, stopLine - 1.5 * atr(i)); }
+        }
+      }
+      const sg = bySig.get(i);
+      if (!pending && sg && sg.k !== 'warn') { if ((sg.k === 'buy' && !qty) || (sg.k === 'sell' && qty)) pending = sg; }
+      const eq = cash + qty * b.close;
+      peak = Math.max(peak, eq); mdd = Math.max(mdd, (peak - eq) / peak * 100);
+    }
+    const last = arr.at(-1), eqEnd = cash + qty * last.close;
+    if (qty) trades.push({ ...cur, exitTime: last.time, exitPx: last.close, why: '回測結束（未平倉，以收盤價計）', pnl: eqEnd - cur.cost, pct: (eqEnd - cur.cost) / cur.cost * 100, open: true });
+    return { eqEnd, trades, mdd, fees, hold: (last.close / arr[26].open - 1) * 100 };
+  }
+  function summarize(R, R0) {
+    const done = R.trades.filter(t => !t.open), wins = done.filter(t => t.pnl > 0), losses = done.filter(t => t.pnl <= 0);
+    const avg = a => a.length ? a.reduce((s, t) => s + t.pct, 0) / a.length : 0;
+    return { ret: (R.eqEnd / START_CASH - 1) * 100, ret0: (R0.eqEnd / START_CASH - 1) * 100, eq: R.eqEnd, n: done.length, open: R.trades.length > done.length,
+      win: done.length ? wins.length / done.length * 100 : null, w: wins.length, l: losses.length, aw: avg(wins), al: avg(losses), mdd: R.mdd, fees: R.fees, hold: R.hold, trades: R.trades };
+  }
   $('btBtn').onclick = async () => {
     const btn = $('btBtn'); if (btn.disabled) return;
     btn.disabled = true;
@@ -688,28 +752,31 @@
       const sym = $('symbol').value, itv = $('btInterval').value, total = +$('btBars').value, feePct = Math.max(0, +$('btFee').value || 0);
       const arr = await fetchHistory(sym, itv, total, prog);
       if (arr.length < 100) throw new Error('K線太少');
-      const sigs = await scanAsync(arr, prog);
-      const R = simulate(arr, sigs, feePct), R0 = simulate(arr, sigs, 0);
-      const ret = (R.eqEnd / START_CASH - 1) * 100, ret0 = (R0.eqEnd / START_CASH - 1) * 100;
-      const done = R.trades.filter(t => !t.open), wins = done.filter(t => t.pnl > 0);
-      const avg = a => a.length ? a.reduce((s, t) => s + t.pct, 0) / a.length : 0;
-      const losses = done.filter(t => t.pnl <= 0);
+      const sigsOld = await scanAsync(arr, t => prog('舊規則 ' + t));
+      const lvMap = new Map();
+      const sigsNew = await scanAsync(arr, t => prog('新規則 ' + t), { strict: true, lvMap });
+      const O = summarize(simulate(arr, sigsOld, feePct), simulate(arr, sigsOld, 0));
+      const N = summarize(simulateSqrt(arr, sigsNew, lvMap, feePct), simulateSqrt(arr, sigsNew, lvMap, 0));
       const c = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
       const pct = v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
-      $('btResult').style.display = '';
-      $('btResult').innerHTML = `
-        <span>期間</span><span>${barTime(arr[0].time)} ～ ${barTime(arr.at(-1).time)}</span>
-        <span><b>最後結果</b></span><span class="${c(ret)}"><b>${ret >= 0 ? '賺' : '賠'} ${fmt(Math.abs(R.eqEnd - START_CASH), 2)} USDT（${pct(ret)}）</b></span>
-        <span>本金 → 最後</span><span>${fmt(START_CASH, 0)} → ${fmt(R.eqEnd, 2)}</span>
-        <span>交易次數</span><span>${done.length} 次${R.trades.length > done.length ? '（另 1 筆未平倉）' : ''}</span>
-        <span>勝率</span><span>${done.length ? (wins.length / done.length * 100).toFixed(0) + '%（' + wins.length + '勝' + losses.length + '敗）' : '--'}</span>
-        <span>平均賺／平均賠</span><span><span class="pos">${pct(avg(wins))}</span> ／ <span class="neg">${pct(avg(losses))}</span></span>
-        <span>最大回落</span><span class="neg">-${R.mdd.toFixed(2)}%</span>
-        <span>付掉的手續費</span><span>${fmt(R.fees, 2)} USDT</span>
-        <span>如果不用手續費</span><span class="${c(ret0)}">${pct(ret0)}</span>
-        <span>同期間買了放著不動</span><span class="${c(R.hold)}">${pct(R.hold)}</span>`;
-      $('btTrades').innerHTML = '<div style="color:#8b93a7">最近 30 筆交易：</div>' + R.trades.slice(-30).reverse().map(t =>
+      const res = X => `<b class="${c(X.ret)}">${X.ret >= 0 ? '賺' : '賠'} ${fmt(Math.abs(X.eq - START_CASH), 0)}<br>${pct(X.ret)}</b>`;
+      const rows = [
+        ['最後結果', res(O), res(N)],
+        ['交易次數', O.n + (O.open ? '+1' : ''), N.n + (N.open ? '+1' : '')],
+        ['勝率', O.win == null ? '--' : `${O.win.toFixed(0)}%<br>${O.w}勝${O.l}敗`, N.win == null ? '--' : `${N.win.toFixed(0)}%<br>${N.w}勝${N.l}敗`],
+        ['平均賺', `<span class="pos">${pct(O.aw)}</span>`, `<span class="pos">${pct(N.aw)}</span>`],
+        ['平均賠', `<span class="neg">${pct(O.al)}</span>`, `<span class="neg">${pct(N.al)}</span>`],
+        ['最大回落', `<span class="neg">-${O.mdd.toFixed(2)}%</span>`, `<span class="neg">-${N.mdd.toFixed(2)}%</span>`],
+        ['手續費', fmt(O.fees, 0), fmt(N.fees, 0)],
+        ['不用手續費', `<span class="${c(O.ret0)}">${pct(O.ret0)}</span>`, `<span class="${c(N.ret0)}">${pct(N.ret0)}</span>`]
+      ];
+      $('btResult').style.display = 'block';
+      $('btResult').innerHTML = `<div style="color:#8b93a7;margin-bottom:6px">${barTime(arr[0].time)} ～ ${barTime(arr.at(-1).time)}　同期間買了放著不動：<span class="${c(O.hold)}">${pct(O.hold)}</span></div>
+        <table class="bt"><tr><th></th><th>舊規則</th><th>新規則<br><small>根號停損＋量</small></th></tr>
+        ${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')}</table>`;
+      const list = (X, name) => `<div style="color:#8b93a7;margin-top:6px">${name}最近 20 筆：</div>` + X.trades.slice(-20).reverse().map(t =>
         `<div><span style="color:#8b93a7">${barTime(t.entryTime)}</span> ${t.reason} @ ${fmt(t.entryPx)} → ${t.why} @ ${fmt(t.exitPx)}　<b class="${c(t.pnl)}">${pct(t.pct)}</b></div>`).join('');
+      $('btTrades').innerHTML = list(N, '新規則') + list(O, '舊規則');
     } catch (e) {
       $('btResult').style.display = '';
       $('btResult').innerHTML = `<span>回測失敗</span><span class="neg">${e.message}</span>`;
