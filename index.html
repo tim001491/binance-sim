@@ -55,7 +55,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v24</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v25</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -136,6 +136,36 @@
     </div>
 
     <div class="card">
+      <h2>回測（紅虛線做多、綠虛線做空）</h2>
+      <div class="row">
+        <label>週期</label>
+        <select id="btInterval">
+          <option value="1m">1分K</option>
+          <option value="5m">5分K</option>
+          <option value="15m" selected>15分K</option>
+          <option value="1h">60分K</option>
+          <option value="4h">4小時K</option>
+          <option value="1d">日K</option>
+        </select>
+        <label>最近</label>
+        <select id="btBars">
+          <option value="1000">1000 根</option>
+          <option value="3000" selected>3000 根</option>
+          <option value="5000">5000 根</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>手續費（單邊）</label><input id="btFee" type="number" step="0.01" min="0" value="0.05"><label>%</label>
+        <label>槓桿</label>
+        <select id="btLev"><option value="1">1 倍</option><option value="2">2 倍</option><option value="3">3 倍</option><option value="5">5 倍</option><option value="10">10 倍</option></select>
+      </div>
+      <div class="row"><button id="btBtn">▶ 開始回測</button></div>
+      <div id="btResult" style="display:none"></div>
+      <div class="log" id="btTrades" style="margin-top:8px"></div>
+      <p class="hint">規則：虛線出現在K棒收盤，下一根開盤進場；紅虛線（連續兩根紅量、後面比前面大）→ 做多（有空單先平），綠虛線（連續兩根綠量、後面比前面大）→ 做空（有多單先平），每次都用全部資金。另外列出「只做多」（綠虛線只平倉、不放空）給你比較。幣種用上方選的。過去的結果不代表未來。</p>
+    </div>
+
+    <div class="card">
       <h2>風險控管</h2>
       <div class="row">
         <label>保險停損</label><input id="sl" type="number" step="0.1" min="0" value="0"><label>%（價格反向幾 % 就平倉，設 0 不使用）</label>
@@ -176,7 +206,7 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
   };
-  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','lev','sl','maxTrades'];
+  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','lev','sl','maxTrades','btInterval','btBars','btFee','btLev'];
   const saved = store.get('sqrt_settings', {});
   if (!saved.countV2) { delete saved.count; saved.countV2 = 1; } // 預設改成只顯示 2 段
   SETTING_IDS.forEach(id => { if (saved[id] != null) $(id).value = saved[id]; if ($(id).tagName === 'SELECT' && !$(id).value) $(id).selectedIndex = id === 'step' ? 1 : 0; });
@@ -365,16 +395,19 @@
   // ---------- 虛線標註：第一組「連續兩根同色量，後面比前面大」----------
   // 一連串紅量之後，第一次出現兩根綠量且後面 > 前面 → 綠色虛線；反過來 → 紅色虛線（只看已收盤K棒）
   let volMarks = [];
-  function calcVolMarks() {
+  function volMarksOf(arr) {
     const out = []; let state = null;
-    for (let i = 1; i < candles.length - 1; i++) {
-      const a = candles[i - 1], b = candles[i], ra = a.close >= a.open, rb = b.close >= b.open;
+    for (let i = 1; i < arr.length - 1; i++) {
+      const a = arr[i - 1], b = arr[i], ra = a.close >= a.open, rb = b.close >= b.open;
       if (ra !== rb || !(b.volume > a.volume)) continue;
-      const col = rb ? 'r' : 'g';
-      if (state === col) continue;
-      state = col; out.push({ time: b.time, color: rb ? UP : DN });
+      if (state === rb) continue;
+      state = rb; out.push({ i, time: b.time, red: rb });
     }
-    volMarks = out; drawVMarks();
+    return out;
+  }
+  function calcVolMarks() {
+    volMarks = volMarksOf(candles).map(m => ({ time: m.time, color: m.red ? UP : DN }));
+    drawVMarks();
   }
   function drawVMarks() {
     [[chart, 'vlMain', 28], [volChart, 'vlVol', 0], [macdChart, 'vlMacd', 28]].forEach(([c, id, axis]) => {
@@ -569,6 +602,113 @@
       <span>勝率</span><span>${trades ? (acct.wins / trades * 100).toFixed(0) + '%（' + acct.wins + '勝' + acct.losses + '敗）' : '--'}</span>`;
   }
 
+  // ---------- 回測 ----------
+  const barTime = t => { const d = new Date((t - TZ) * 1000); return d.toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); };
+  async function fetchHistory(sym, itv, total, onProg) {
+    let out = [], end;
+    while (out.length < total) {
+      const lim = Math.min(1000, total - out.length);
+      const r = await fetch(`${REST}?symbol=${sym}&interval=${itv}&limit=${lim}` + (end ? `&endTime=${end}` : ''));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      if (!data.length) break;
+      out = data.map(k => ({ time: k[0] / 1000 + TZ, open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })).concat(out);
+      end = data[0][0] - 1;
+      onProg(`下載K線 ${out.length}/${total}…`);
+      if (data.length < lim) break;
+    }
+    return out;
+  }
+  function simulateLS(arr, sigs, feePct, lev, allowShort) {
+    const fee = feePct / 100, bySig = new Map(sigs.map(x => [x.i, x]));
+    let eq = START_CASH, side = null, entry = 0, qty = 0, margin = 0, openFee = 0, cur = null, pending = null, peak = eq, mdd = 0, fees = 0, dead = false;
+    const trades = [];
+    const close = (i, px, why) => {
+      const gross = Math.max(-margin, (px - entry) * qty * (side === 'long' ? 1 : -1)), f = qty * px * fee; fees += f;
+      eq = Math.max(0, margin + gross - f);
+      const net = eq - cur.start;
+      trades.push({ ...cur, exitTime: arr[i].time, exitPx: px, why, pnl: net, pct: net / cur.start * 100 });
+      side = null; cur = null;
+      if (eq <= 1) dead = true;
+    };
+    let first = null;
+    for (let i = 3; i < arr.length && !dead; i++) {
+      const b = arr[i];
+      if (pending) {
+        const want = pending.k === 'buy' ? 'long' : (allowShort ? 'short' : null);
+        if (side && side !== want) close(i, b.open, pending.why);
+        if (want && !side && !dead) {
+          margin = eq; const notional = margin * lev; openFee = notional * fee; fees += openFee;
+          qty = (notional - openFee) / b.open; entry = b.open; side = want;
+          cur = { side, entryTime: b.time, entryPx: b.open, start: eq, reason: pending.why };
+          margin = eq - 0; // 手續費從名目扣
+          if (first == null) first = i;
+        }
+        pending = null;
+      }
+      if (side) { // 爆倉檢查（用影線）
+        const worst = side === 'long' ? b.low : b.high;
+        if ((worst - entry) * qty * (side === 'long' ? 1 : -1) <= -margin) { close(i, worst, '💥 爆倉'); continue; }
+      }
+      const sg = bySig.get(i); if (sg) pending = sg;
+      const cur_eq = side ? margin + (b.close - entry) * qty * (side === 'long' ? 1 : -1) : eq;
+      peak = Math.max(peak, cur_eq); mdd = Math.max(mdd, (peak - cur_eq) / peak * 100);
+    }
+    const last = arr.at(-1);
+    let eqEnd = eq;
+    if (side) { eqEnd = margin + (last.close - entry) * qty * (side === 'long' ? 1 : -1); trades.push({ ...cur, exitTime: last.time, exitPx: last.close, why: '回測結束（未平倉，以收盤價計）', pnl: eqEnd - cur.start, pct: (eqEnd - cur.start) / cur.start * 100, open: true }); }
+    return { eqEnd, trades, mdd, fees, dead };
+  }
+  function summarizeLS(R, R0) {
+    const done = R.trades.filter(t => !t.open), wins = done.filter(t => t.pnl > 0), losses = done.filter(t => t.pnl <= 0);
+    const avg = a => a.length ? a.reduce((s, t) => s + t.pct, 0) / a.length : 0;
+    const sum = a => a.reduce((s, t) => s + t.pnl, 0);
+    const L = done.filter(t => t.side === 'long'), S = done.filter(t => t.side === 'short');
+    return { ret: (R.eqEnd / START_CASH - 1) * 100, ret0: (R0.eqEnd / START_CASH - 1) * 100, eq: R.eqEnd, n: done.length, open: R.trades.length > done.length,
+      win: done.length ? wins.length / done.length * 100 : null, w: wins.length, l: losses.length, aw: avg(wins), al: avg(losses), mdd: R.mdd, fees: R.fees, trades: R.trades, dead: R.dead,
+      L: { n: L.length, w: L.filter(t => t.pnl > 0).length, pnl: sum(L) }, S: { n: S.length, w: S.filter(t => t.pnl > 0).length, pnl: sum(S) } };
+  }
+  $('btBtn').onclick = async () => {
+    const btn = $('btBtn'); if (btn.disabled) return;
+    btn.disabled = true;
+    const prog = t => btn.textContent = '⏳ ' + t;
+    try {
+      const sym = $('symbol').value, itv = $('btInterval').value, total = +$('btBars').value, feePct = Math.max(0, +$('btFee').value || 0), lev = +$('btLev').value || 1;
+      const arr = await fetchHistory(sym, itv, total, prog);
+      if (arr.length < 100) throw new Error('K線太少');
+      prog('計算訊號…'); await new Promise(r => setTimeout(r, 30));
+      const sigs = volMarksOf(arr).map(m => ({ i: m.i, k: m.red ? 'buy' : 'sell', why: m.red ? '紅虛線：連續兩根紅量、後面比前面大' : '綠虛線：連續兩根綠量、後面比前面大' }));
+      const A = summarizeLS(simulateLS(arr, sigs, feePct, lev, true), simulateLS(arr, sigs, 0, lev, true));
+      const B = summarizeLS(simulateLS(arr, sigs, feePct, lev, false), simulateLS(arr, sigs, 0, lev, false));
+      const hold = (arr.at(-1).close / arr[3].open - 1) * 100;
+      const c = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+      const pct = v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+      const res = X => `<b class="${c(X.ret)}">${X.ret >= 0 ? '賺' : '賠'} ${fmt(Math.abs(X.eq - START_CASH), 0)}<br>${pct(X.ret)}</b>${X.dead ? '<br><span class="neg">💥 爆倉</span>' : ''}`;
+      const side = (X, k) => X[k].n ? `${X[k].n} 次，${X[k].w} 勝<br><span class="${c(X[k].pnl)}">${X[k].pnl >= 0 ? '+' : ''}${fmt(X[k].pnl, 0)}</span>` : '--';
+      const rows = [
+        ['最後結果', res(A), res(B)],
+        ['交易次數', A.n + (A.open ? '+1' : ''), B.n + (B.open ? '+1' : '')],
+        ['勝率', ...[A, B].map(X => X.win == null ? '--' : `${X.win.toFixed(0)}%<br>${X.w}勝${X.l}敗`)],
+        ['做多', side(A, 'L'), side(B, 'L')],
+        ['做空', side(A, 'S'), '不做空'],
+        ['平均賺', ...[A, B].map(X => `<span class="pos">${pct(X.aw)}</span>`)],
+        ['平均賠', ...[A, B].map(X => `<span class="neg">${pct(X.al)}</span>`)],
+        ['最大回落', ...[A, B].map(X => `<span class="neg">-${X.mdd.toFixed(2)}%</span>`)],
+        ['手續費', ...[A, B].map(X => fmt(X.fees, 0))],
+        ['不用手續費', ...[A, B].map(X => `<span class="${c(X.ret0)}">${pct(X.ret0)}</span>`)]
+      ];
+      $('btResult').style.display = 'block';
+      $('btResult').innerHTML = `<div style="color:#8b93a7;margin-bottom:6px">${barTime(arr[0].time)} ～ ${barTime(arr.at(-1).time)}（${lev} 倍）<br>同期間買了放著不動：<span class="${c(hold)}">${pct(hold)}</span></div>
+        <table class="bt"><tr><th></th><th style="color:#f0b90b">多空都做</th><th>只做多</th></tr>
+        ${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')}</table>`;
+      $('btTrades').innerHTML = '<div style="color:#8b93a7">多空都做・最近 30 筆：</div>' + A.trades.slice(-30).reverse().map(t =>
+        `<div><span style="color:#8b93a7">${barTime(t.entryTime)}</span> <b class="${t.side === 'long' ? 'pos' : 'neg'}">${t.side === 'long' ? '多' : '空'}</b> @ ${fmt(t.entryPx)} → ${fmt(t.exitPx)}　<b class="${c(t.pnl)}">${pct(t.pct)}</b><br><span style="color:#8b93a7;font-size:11px">${t.reason}</span></div>`).join('');
+    } catch (e) {
+      $('btResult').style.display = 'block';
+      $('btResult').innerHTML = `<span class="neg">回測失敗：${e.message}</span>`;
+    } finally { btn.disabled = false; btn.textContent = '▶ 開始回測'; }
+  };
+
   // ---------- alerts & log ----------
   let audio = null;
   function beep() {
@@ -616,7 +756,7 @@
   };
   ['symbol', 'interval'].forEach(id => $(id).onchange = () => { saveSettings(); load(); });
   ['lookback', 'step', 'count'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
-  ['tradeSize', 'lev', 'sl', 'maxTrades'].forEach(id => $(id).onchange = saveSettings);
+  ['tradeSize', 'lev', 'sl', 'maxTrades', 'btInterval', 'btBars', 'btFee', 'btLev'].forEach(id => $(id).onchange = saveSettings);
 
   $('log').innerHTML = acct.log.map(x => `<div>${x}</div>`).join('');
   renderAcct();
