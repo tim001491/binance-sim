@@ -23,6 +23,8 @@
   @media(max-width:900px){main{grid-template-columns:1fr}}
   #chart{height:440px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   @media(max-width:600px){#chart{height:360px}}
+  .vlayer{position:absolute;left:0;top:0;right:0;pointer-events:none;z-index:4;overflow:hidden}
+  .vlayer i{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed}
   .zoom{position:absolute;left:8px;top:8px;z-index:5;display:flex;gap:6px}
   .zoom button{width:40px;height:40px;padding:0;font-size:22px;line-height:1;border-radius:10px;background:rgba(23,26,33,.85);border:1px solid var(--line);color:var(--text)}
   .zoom button:active{background:#2a2f3a}
@@ -53,7 +55,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v23</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v24</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -77,6 +79,7 @@
   <div>
     <div style="position:relative">
       <div id="chart"></div>
+      <div class="vlayer" id="vlMain"></div>
       <div class="zoom">
         <button id="zoomIn" title="放大">＋</button>
         <button id="zoomOut" title="縮小">－</button>
@@ -90,8 +93,8 @@
       </div>
       <div class="levels" id="levels"></div>
     </div>
-    <div class="sub"><div class="tag" id="volTag">成交量</div><div id="volChart"></div></div>
-    <div class="sub"><div class="tag" id="macdTag">MACD (12,26,9)</div><div id="macdChart"></div></div>
+    <div class="sub"><div class="tag" id="volTag">成交量</div><div id="volChart"></div><div class="vlayer" id="vlVol"></div></div>
+    <div class="sub"><div class="tag" id="macdTag">MACD (12,26,9)</div><div id="macdChart"></div><div class="vlayer" id="vlMacd"></div></div>
     <p class="hint">由右往左，每兩個相鄰轉折點相乘開根號，程式自動分色：<b style="color:#b26bff">下跌段（高→低）＝紫線 壓力／賣出參考</b>，<b style="color:#ff9f1a">上漲段（低→高）＝橘線 支撐／停損</b>。實線＝最靠右（最新）的一條，虛線＝更左邊的舊轉折。最右邊那段會跟著即時價格重算。</p>
   </div>
 
@@ -359,6 +362,31 @@
     }
     return out;
   }
+  // ---------- 虛線標註：第一組「連續兩根同色量，後面比前面大」----------
+  // 一連串紅量之後，第一次出現兩根綠量且後面 > 前面 → 綠色虛線；反過來 → 紅色虛線（只看已收盤K棒）
+  let volMarks = [];
+  function calcVolMarks() {
+    const out = []; let state = null;
+    for (let i = 1; i < candles.length - 1; i++) {
+      const a = candles[i - 1], b = candles[i], ra = a.close >= a.open, rb = b.close >= b.open;
+      if (ra !== rb || !(b.volume > a.volume)) continue;
+      const col = rb ? 'r' : 'g';
+      if (state === col) continue;
+      state = col; out.push({ time: b.time, color: rb ? UP : DN });
+    }
+    volMarks = out; drawVMarks();
+  }
+  function drawVMarks() {
+    [[chart, 'vlMain', 28], [volChart, 'vlVol', 0], [macdChart, 'vlMacd', 28]].forEach(([c, id, axis]) => {
+      const el = $(id); if (!el) return;
+      el.style.bottom = axis + 'px';
+      const ts = c.timeScale();
+      el.innerHTML = volMarks.map(m => { const x = ts.timeToCoordinate(m.time); return x == null ? '' : `<i style="left:${Math.round(x)}px;border-color:${m.color}"></i>`; }).join('');
+    });
+  }
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => requestAnimationFrame(drawVMarks));
+  try { new ResizeObserver(() => requestAnimationFrame(drawVMarks)).observe($('chart')); } catch {}
+
   function calcLevels() {
     if (!candles.length) return;
     const n = Math.max(20, +$('lookback').value || 100);
@@ -437,6 +465,7 @@
       lastPrice = candles.at(-1).close;
       showPrice();
       calcLevels();
+      calcVolMarks();
       chart.timeScale().scrollToRealTime();
       connect(sym, itv, my);
     } catch (e) {
@@ -452,7 +481,7 @@
       const k = JSON.parse(ev.data).k; if (!k) return;
       const c = { time: k.t / 1000 + TZ, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
       const last = candles.at(-1);
-      if (last && last.time === c.time) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); }
+      if (last && last.time === c.time) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); setTimeout(calcVolMarks); }
       series.update(c);
       updateSubData();
       onPrice(c.close);
