@@ -55,7 +55,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v26</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v27</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -162,7 +162,7 @@
       <div class="row"><button id="btBtn">▶ 開始回測</button></div>
       <div id="btResult" style="display:none"></div>
       <div class="log" id="btTrades" style="margin-top:8px"></div>
-      <p class="hint">規則：虛線出現在K棒收盤，下一根開盤進場；紅虛線（連續兩根紅量、後面比前面大）→ 做多（有空單先平），綠虛線（連續兩根綠量、後面比前面大）→ 做空（有多單先平），每次都用全部資金。有開「根號停損」的欄位：做多停損＝√（下單那根之前的前波低點 × 進場後最高價），K棒最低點碰到就停損；做空反過來。停損出場後空手，等下一條虛線再進場。「只做多」＝綠虛線只平倉、不放空。幣種用上方選的。過去的結果不代表未來。</p>
+      <p class="hint">規則：虛線出現在K棒收盤，下一根開盤進場；紅虛線（連續兩根紅量、後面比前面大）→ 做多（有空單先平），綠虛線（連續兩根綠量、後面比前面大）→ 做空（有多單先平），每次都用全部資金。有開「根號停損」的欄位：做多停損＝√（下單那根之前的前波低點 × 進場後最高價），K棒最低點碰到就停損；做空反過來。停損出場後，每根K跟前一根比：紅量 ≥ 前一根 ×「停損後買點」倍數（在風險控管設定）就下一根開盤做多，綠量 ≥ 倍數就做空（只做多那欄不做空）；虛線出現也照樣進場。「只做多」＝綠虛線只平倉、不放空。幣種用上方選的。過去的結果不代表未來。</p>
     </div>
 
     <div class="card">
@@ -171,7 +171,10 @@
         <label>根號移動停損</label>
         <select id="rootStop"><option value="on">開啟</option><option value="off">關閉</option></select>
       </div>
-      <p class="hint" style="margin-top:0">做多：停損＝√（下單那根K之前的前波低點 × 下單後一路更新的最高價），價格跌破就平倉；做空反過來：√（前波高點 × 下單後最低價），價格漲破就平倉。前波高低點用「開根號設定」的轉折靈敏度找。</p>
+      <div class="row">
+        <label>停損後買點：量 ≥ 前一根的</label><input id="reMult" type="number" step="0.1" min="1" value="1.5"><label>倍</label>
+      </div>
+      <p class="hint" style="margin-top:0">停損出場後，每根K收盤都跟前一根比：紅K的量 ≥ 前一根 × 這個倍數 → 買進點（做多）；綠K的量 ≥ 前一根 × 倍數 → 做空點。網頁會提醒你。<br>做多：停損＝√（下單那根K之前的前波低點 × 下單後一路更新的最高價），價格跌破就平倉；做空反過來：√（前波高點 × 下單後最低價），價格漲破就平倉。前波高低點用「開根號設定」的轉折靈敏度找。</p>
       <div class="row">
         <label>保險停損</label><input id="sl" type="number" step="0.1" min="0" value="0"><label>%（價格反向幾 % 就平倉，設 0 不使用）</label>
       </div>
@@ -211,7 +214,7 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
   };
-  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','lev','rootStop','sl','maxTrades','btInterval','btBars','btFee','btLev'];
+  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','lev','rootStop','reMult','sl','maxTrades','btInterval','btBars','btFee','btLev'];
   const saved = store.get('sqrt_settings', {});
   if (!saved.countV2) { delete saved.count; saved.countV2 = 1; } // 預設改成只顯示 2 段
   SETTING_IDS.forEach(id => { if (saved[id] != null) $(id).value = saved[id]; if ($(id).tagName === 'SELECT' && !$(id).value) $(id).selectedIndex = id === 'step' ? 1 : 0; });
@@ -519,7 +522,7 @@
       const k = JSON.parse(ev.data).k; if (!k) return;
       const c = { time: k.t / 1000 + TZ, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
       const last = candles.at(-1);
-      if (last && last.time === c.time) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); setTimeout(calcVolMarks); }
+      if (last && last.time === c.time) candles[candles.length - 1] = c; else { candles.push(c); if (candles.length > 1500) candles.shift(); setTimeout(calcVolMarks); setTimeout(checkReentry); }
       series.update(c);
       updateSubData();
       onPrice(c.close);
@@ -569,6 +572,18 @@
     return side === 'long' ? Math.min(...prev.map(c => c.low)) : Math.max(...prev.map(c => c.high));
   }
   const rootStopPx = (ref, ext) => Math.sqrt(ref * ext);
+  // 停損後買點：剛收盤那根 vs 前一根，同色量 ≥ 前一根 × 倍數
+  function reentryOf(b, a) {
+    const m = Math.max(1, +$('reMult').value || 1.5);
+    if (!a || !(a.volume > 0) || b.volume < a.volume * m) return null;
+    const red = b.close >= b.open;
+    return { k: red ? 'buy' : 'sell', why: `停損後${red ? '買點：紅' : '空點：綠'}量 ${fmtVol(b.volume)} ≥ 前一根 ${fmtVol(a.volume)} × ${m}` };
+  }
+  function checkReentry() {
+    if (!acct.afterStop || acct.side || candles.length < 3) return;
+    const r = reentryOf(candles.at(-2), candles.at(-3));
+    if (r) { alertUser(`${r.k === 'buy' ? '🔴 買進點' : '🟢 做空點'}　${r.why}`); acct.afterStop = false; saveAcct(); }
+  }
   let stopLine = null;
   function drawStopLine() {
     const on = acct.side && acct.ref && acct.symbol === $('symbol').value && $('rootStop').value === 'on';
@@ -595,6 +610,7 @@
     const notional = margin * lev, fee = notional * FFEE;
     acct.side = side; acct.qty = notional / lastPrice; acct.entry = lastPrice; acct.margin = margin; acct.openFee = fee;
     acct.cash -= margin + fee; acct.symbol = sym; acct.dayEntries++;
+    acct.afterStop = false;
     acct.ref = candles.length > 3 ? swingRef(candles, candles.length - 1, side) : null; acct.ext = lastPrice;
     addLog(`${side === 'long' ? '🔴 做多' : '🟢 做空'} ${acct.qty.toFixed(6)} ${sym.replace('USDT','')} @ ${fmt(lastPrice)}（${lev} 倍，${reason}）` + (acct.ref ? `，前波${side === 'long' ? '低' : '高'}點 ${fmt(acct.ref, 2)}，根號停損 ${fmt(rootStopPx(acct.ref, acct.ext))}` : ''));
     saveAcct(); renderAcct(); drawStopLine();
@@ -617,7 +633,7 @@
       const long = acct.side === 'long';
       if (long ? p > acct.ext : p < acct.ext) { acct.ext = p; saveAcct(); }
       const sp = rootStopPx(acct.ref, acct.ext);
-      if (long ? p <= sp : p >= sp) { closePos(`${long ? '跌破' : '漲破'}根號停損 ${fmt(sp)}（√ ${fmt(acct.ref, 2)} × ${fmt(acct.ext, 2)}）`); return alertUser('⛔ 觸發根號移動停損'); }
+      if (long ? p <= sp : p >= sp) { acct.afterStop = true; closePos(`${long ? '跌破' : '漲破'}根號停損 ${fmt(sp)}（√ ${fmt(acct.ref, 2)} × ${fmt(acct.ext, 2)}）`); return alertUser('⛔ 觸發根號移動停損'); }
       drawStopLine();
     }
     const move = (p - acct.entry) / acct.entry * 100 * (acct.side === 'long' ? 1 : -1), sl = +$('sl').value;
@@ -659,7 +675,7 @@
   }
   function simulateLS(arr, sigs, feePct, lev, allowShort, useStop) {
     const fee = feePct / 100, bySig = new Map(sigs.map(x => [x.i, x]));
-    let eq = START_CASH, side = null, entry = 0, qty = 0, margin = 0, openFee = 0, cur = null, pending = null, peak = eq, mdd = 0, fees = 0, dead = false, ref = 0, ext = 0;
+    let eq = START_CASH, side = null, entry = 0, qty = 0, margin = 0, openFee = 0, cur = null, pending = null, peak = eq, mdd = 0, fees = 0, dead = false, ref = 0, ext = 0, afterStop = false;
     const trades = [];
     const close = (i, px, why) => {
       const gross = Math.max(-margin, (px - entry) * qty * (side === 'long' ? 1 : -1)), f = qty * px * fee; fees += f;
@@ -679,6 +695,7 @@
           margin = eq; const notional = margin * lev; openFee = notional * fee; fees += openFee;
           qty = (notional - openFee) / b.open; entry = b.open; side = want;
           cur = { side, entryTime: b.time, entryPx: b.open, start: eq, reason: pending.why };
+          afterStop = false;
           if (useStop) {
             ref = swingRef(arr, pending.i, side); ext = b.open;
             if (side === 'long' ? ref >= b.open : ref <= b.open) ref = side === 'long' ? Math.min(...arr.slice(Math.max(0, pending.i - 20), pending.i + 1).map(c => c.low)) : Math.max(...arr.slice(Math.max(0, pending.i - 20), pending.i + 1).map(c => c.high));
@@ -692,12 +709,17 @@
       if (side && useStop) { // 根號移動停損：先用這根之前的最高（最低）價算停損，再更新
         const sp = Math.sqrt(ref * ext), long = side === 'long';
         if (long ? b.low <= sp : b.high >= sp) {
+          afterStop = true;
           close(i, long ? Math.min(b.open, sp) : Math.max(b.open, sp), `${long ? '跌破' : '漲破'}根號停損 ${fmt(sp)}（√ ${fmt(ref, 2)} × ${fmt(ext, 2)}）`);
         } else ext = long ? Math.max(ext, b.high) : Math.min(ext, b.low);
       }
       if (side) { // 爆倉檢查（用影線）
         const worst = side === 'long' ? b.low : b.high;
         if ((worst - entry) * qty * (side === 'long' ? 1 : -1) <= -margin) { close(i, worst, '💥 爆倉'); continue; }
+      }
+      if (useStop && afterStop && !side && !pending) { // 停損後：每根跟前一根比量
+        const r = reentryOf(b, arr[i - 1]);
+        if (r && (r.k === 'buy' || allowShort)) pending = { ...r, i };
       }
       const sg = bySig.get(i); if (sg) pending = sg;
       const cur_eq = side ? margin + (b.close - entry) * qty * (side === 'long' ? 1 : -1) : eq;
@@ -808,7 +830,7 @@
   };
   ['symbol', 'interval'].forEach(id => $(id).onchange = () => { saveSettings(); load(); });
   ['lookback', 'step', 'count'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
-  ['tradeSize', 'lev', 'sl', 'maxTrades', 'btInterval', 'btBars', 'btFee', 'btLev'].forEach(id => $(id).onchange = saveSettings);
+  ['tradeSize', 'lev', 'reMult', 'sl', 'maxTrades', 'btInterval', 'btBars', 'btFee', 'btLev'].forEach(id => $(id).onchange = saveSettings);
   $('rootStop').onchange = () => { saveSettings(); drawStopLine(); };
 
   $('log').innerHTML = acct.log.map(x => `<div>${x}</div>`).join('');
