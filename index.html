@@ -55,7 +55,7 @@
 </head>
 <body>
 <header>
-  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v25</small></h1>
+  <h1>開根號盯盤・模擬交易 <small style="font-size:12px;color:#8b93a7">v26</small></h1>
   <select id="symbol">
     <option value="BTCUSDT">BTC/USDT</option>
     <option value="ETHUSDT">ETH/USDT</option>
@@ -162,11 +162,16 @@
       <div class="row"><button id="btBtn">▶ 開始回測</button></div>
       <div id="btResult" style="display:none"></div>
       <div class="log" id="btTrades" style="margin-top:8px"></div>
-      <p class="hint">規則：虛線出現在K棒收盤，下一根開盤進場；紅虛線（連續兩根紅量、後面比前面大）→ 做多（有空單先平），綠虛線（連續兩根綠量、後面比前面大）→ 做空（有多單先平），每次都用全部資金。另外列出「只做多」（綠虛線只平倉、不放空）給你比較。幣種用上方選的。過去的結果不代表未來。</p>
+      <p class="hint">規則：虛線出現在K棒收盤，下一根開盤進場；紅虛線（連續兩根紅量、後面比前面大）→ 做多（有空單先平），綠虛線（連續兩根綠量、後面比前面大）→ 做空（有多單先平），每次都用全部資金。有開「根號停損」的欄位：做多停損＝√（下單那根之前的前波低點 × 進場後最高價），K棒最低點碰到就停損；做空反過來。停損出場後空手，等下一條虛線再進場。「只做多」＝綠虛線只平倉、不放空。幣種用上方選的。過去的結果不代表未來。</p>
     </div>
 
     <div class="card">
       <h2>風險控管</h2>
+      <div class="row">
+        <label>根號移動停損</label>
+        <select id="rootStop"><option value="on">開啟</option><option value="off">關閉</option></select>
+      </div>
+      <p class="hint" style="margin-top:0">做多：停損＝√（下單那根K之前的前波低點 × 下單後一路更新的最高價），價格跌破就平倉；做空反過來：√（前波高點 × 下單後最低價），價格漲破就平倉。前波高低點用「開根號設定」的轉折靈敏度找。</p>
       <div class="row">
         <label>保險停損</label><input id="sl" type="number" step="0.1" min="0" value="0"><label>%（價格反向幾 % 就平倉，設 0 不使用）</label>
       </div>
@@ -206,7 +211,7 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
   };
-  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','lev','sl','maxTrades','btInterval','btBars','btFee','btLev'];
+  const SETTING_IDS = ['symbol','interval','lookback','step','count','tradeSize','lev','rootStop','sl','maxTrades','btInterval','btBars','btFee','btLev'];
   const saved = store.get('sqrt_settings', {});
   if (!saved.countV2) { delete saved.count; saved.countV2 = 1; } // 預設改成只顯示 2 段
   SETTING_IDS.forEach(id => { if (saved[id] != null) $(id).value = saved[id]; if ($(id).tagName === 'SELECT' && !$(id).value) $(id).selectedIndex = id === 'step' ? 1 : 0; });
@@ -549,6 +554,30 @@
     renderAcct(); renderLevels();
   }
 
+  // ---------- 根號移動停損 ----------
+  // 前波低點（做多）／前波高點（做空）：下單那根K「之前」最近的一個轉折點
+  function swingRef(arr, i, side) {
+    const n = Math.max(20, +$('lookback').value || 100);
+    const slice = arr.slice(Math.max(0, i + 1 - n), i + 1);
+    const piv = findPivots(slice, +$('step').value || 5);
+    const want = side === 'long' ? 'L' : 'H', entryRef = arr[i].close;
+    for (let k = piv.length - 1; k >= 0; k--) {
+      const p = piv[k];
+      if (p.type === want && p.idx < slice.length - 1 && (side === 'long' ? p.price < entryRef : p.price > entryRef)) return p.price;
+    }
+    const prev = slice.slice(0, -1);
+    return side === 'long' ? Math.min(...prev.map(c => c.low)) : Math.max(...prev.map(c => c.high));
+  }
+  const rootStopPx = (ref, ext) => Math.sqrt(ref * ext);
+  let stopLine = null;
+  function drawStopLine() {
+    const on = acct.side && acct.ref && acct.symbol === $('symbol').value && $('rootStop').value === 'on';
+    if (!on) { if (stopLine) { series.removePriceLine(stopLine); stopLine = null; } return; }
+    const px = rootStopPx(acct.ref, acct.ext);
+    const opt = { price: px, color: '#ffffff', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `根號停損 √(${fmt(acct.ref, 2)}×${fmt(acct.ext, 2)})` };
+    if (stopLine) stopLine.applyOptions(opt); else stopLine = series.createPriceLine(opt);
+  }
+
   // ---------- 合約模擬交易（多空都能做）----------
   function rollDay() { if (acct.day !== today()) { acct.day = today(); acct.dayEntries = 0; } }
   const SIDE = { long: '多單', short: '空單' };
@@ -566,8 +595,9 @@
     const notional = margin * lev, fee = notional * FFEE;
     acct.side = side; acct.qty = notional / lastPrice; acct.entry = lastPrice; acct.margin = margin; acct.openFee = fee;
     acct.cash -= margin + fee; acct.symbol = sym; acct.dayEntries++;
-    addLog(`${side === 'long' ? '🔴 做多' : '🟢 做空'} ${acct.qty.toFixed(6)} ${sym.replace('USDT','')} @ ${fmt(lastPrice)}（${lev} 倍，${reason}）`);
-    saveAcct(); renderAcct();
+    acct.ref = candles.length > 3 ? swingRef(candles, candles.length - 1, side) : null; acct.ext = lastPrice;
+    addLog(`${side === 'long' ? '🔴 做多' : '🟢 做空'} ${acct.qty.toFixed(6)} ${sym.replace('USDT','')} @ ${fmt(lastPrice)}（${lev} 倍，${reason}）` + (acct.ref ? `，前波${side === 'long' ? '低' : '高'}點 ${fmt(acct.ref, 2)}，根號停損 ${fmt(rootStopPx(acct.ref, acct.ext))}` : ''));
+    saveAcct(); renderAcct(); drawStopLine();
   }
   function closePos(reason, px) {
     if (!acct.side) return addLog('⚠ 目前沒有持倉');
@@ -576,13 +606,20 @@
     const net = gross - fee - acct.openFee;
     acct.cash += Math.max(0, acct.margin + gross - fee); acct.realized += net; net >= 0 ? acct.wins++ : acct.losses++;
     addLog(`⬜ 平${SIDE[acct.side]} @ ${fmt(p)}，損益 <b class="${net >= 0 ? 'pos' : 'neg'}">${net >= 0 ? '+' : ''}${fmt(net, 2)} USDT</b>（${reason}）`);
-    Object.assign(acct, { side: null, qty: 0, entry: 0, margin: 0, openFee: 0, symbol: null });
-    saveAcct(); renderAcct();
+    Object.assign(acct, { side: null, qty: 0, entry: 0, margin: 0, openFee: 0, symbol: null, ref: null, ext: null });
+    saveAcct(); renderAcct(); drawStopLine();
   }
   function checkStops(p) {
     if (!acct.side || acct.symbol !== $('symbol').value) return;
     const u = unrealOf(p);
     if (u <= -acct.margin * 0.98) { closePos('爆倉：保證金虧光'); return alertUser('💥 爆倉，倉位已強制平倉'); }
+    if (acct.ref && $('rootStop').value === 'on') {
+      const long = acct.side === 'long';
+      if (long ? p > acct.ext : p < acct.ext) { acct.ext = p; saveAcct(); }
+      const sp = rootStopPx(acct.ref, acct.ext);
+      if (long ? p <= sp : p >= sp) { closePos(`${long ? '跌破' : '漲破'}根號停損 ${fmt(sp)}（√ ${fmt(acct.ref, 2)} × ${fmt(acct.ext, 2)}）`); return alertUser('⛔ 觸發根號移動停損'); }
+      drawStopLine();
+    }
     const move = (p - acct.entry) / acct.entry * 100 * (acct.side === 'long' ? 1 : -1), sl = +$('sl').value;
     if (sl > 0 && move <= -sl) { closePos(`保險停損 ${move.toFixed(2)}%`); alertUser('⛔ 觸發保險停損'); }
   }
@@ -597,6 +634,7 @@
       <span>可用 USDT</span><span>${fmt(acct.cash, 2)}</span>
       <span>持倉</span><span>${acct.side ? `<b class="${acct.side === 'long' ? 'pos' : 'neg'}">${SIDE[acct.side]}</b> ${acct.qty.toFixed(6)} ${acct.symbol.replace('USDT','')} @ ${fmt(acct.entry)}` : '無'}</span>
       <span>保證金</span><span>${fmt(acct.margin, 2)}</span>
+      ${acct.side && acct.ref && $('rootStop').value === 'on' ? `<span>根號停損</span><span>${fmt(rootStopPx(acct.ref, acct.ext))}<br><small style="color:#8b93a7">√(前波${acct.side === 'long' ? '低' : '高'} ${fmt(acct.ref, 2)} × ${acct.side === 'long' ? '最高' : '最低'} ${fmt(acct.ext, 2)})</small></span>` : ''}
       <span>未實現損益</span><span class="${c(unreal)}">${fmt(unreal, 2)}</span>
       <span>已實現損益</span><span class="${c(acct.realized)}">${fmt(acct.realized, 2)}</span>
       <span>勝率</span><span>${trades ? (acct.wins / trades * 100).toFixed(0) + '%（' + acct.wins + '勝' + acct.losses + '敗）' : '--'}</span>`;
@@ -619,9 +657,9 @@
     }
     return out;
   }
-  function simulateLS(arr, sigs, feePct, lev, allowShort) {
+  function simulateLS(arr, sigs, feePct, lev, allowShort, useStop) {
     const fee = feePct / 100, bySig = new Map(sigs.map(x => [x.i, x]));
-    let eq = START_CASH, side = null, entry = 0, qty = 0, margin = 0, openFee = 0, cur = null, pending = null, peak = eq, mdd = 0, fees = 0, dead = false;
+    let eq = START_CASH, side = null, entry = 0, qty = 0, margin = 0, openFee = 0, cur = null, pending = null, peak = eq, mdd = 0, fees = 0, dead = false, ref = 0, ext = 0;
     const trades = [];
     const close = (i, px, why) => {
       const gross = Math.max(-margin, (px - entry) * qty * (side === 'long' ? 1 : -1)), f = qty * px * fee; fees += f;
@@ -641,10 +679,21 @@
           margin = eq; const notional = margin * lev; openFee = notional * fee; fees += openFee;
           qty = (notional - openFee) / b.open; entry = b.open; side = want;
           cur = { side, entryTime: b.time, entryPx: b.open, start: eq, reason: pending.why };
+          if (useStop) {
+            ref = swingRef(arr, pending.i, side); ext = b.open;
+            if (side === 'long' ? ref >= b.open : ref <= b.open) ref = side === 'long' ? Math.min(...arr.slice(Math.max(0, pending.i - 20), pending.i + 1).map(c => c.low)) : Math.max(...arr.slice(Math.max(0, pending.i - 20), pending.i + 1).map(c => c.high));
+            cur.ref = ref;
+          }
           margin = eq - 0; // 手續費從名目扣
           if (first == null) first = i;
         }
         pending = null;
+      }
+      if (side && useStop) { // 根號移動停損：先用這根之前的最高（最低）價算停損，再更新
+        const sp = Math.sqrt(ref * ext), long = side === 'long';
+        if (long ? b.low <= sp : b.high >= sp) {
+          close(i, long ? Math.min(b.open, sp) : Math.max(b.open, sp), `${long ? '跌破' : '漲破'}根號停損 ${fmt(sp)}（√ ${fmt(ref, 2)} × ${fmt(ext, 2)}）`);
+        } else ext = long ? Math.max(ext, b.high) : Math.min(ext, b.low);
       }
       if (side) { // 爆倉檢查（用影線）
         const worst = side === 'long' ? b.low : b.high;
@@ -678,31 +727,34 @@
       if (arr.length < 100) throw new Error('K線太少');
       prog('計算訊號…'); await new Promise(r => setTimeout(r, 30));
       const sigs = volMarksOf(arr).map(m => ({ i: m.i, k: m.red ? 'buy' : 'sell', why: m.red ? '紅虛線：連續兩根紅量、後面比前面大' : '綠虛線：連續兩根綠量、後面比前面大' }));
-      const A = summarizeLS(simulateLS(arr, sigs, feePct, lev, true), simulateLS(arr, sigs, 0, lev, true));
-      const B = summarizeLS(simulateLS(arr, sigs, feePct, lev, false), simulateLS(arr, sigs, 0, lev, false));
+      const A = summarizeLS(simulateLS(arr, sigs, feePct, lev, true, false), simulateLS(arr, sigs, 0, lev, true, false));
+      prog('計算根號停損…'); await new Promise(r => setTimeout(r, 30));
+      const C = summarizeLS(simulateLS(arr, sigs, feePct, lev, true, true), simulateLS(arr, sigs, 0, lev, true, true));
+      const B = summarizeLS(simulateLS(arr, sigs, feePct, lev, false, true), simulateLS(arr, sigs, 0, lev, false, true));
       const hold = (arr.at(-1).close / arr[3].open - 1) * 100;
       const c = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
       const pct = v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
       const res = X => `<b class="${c(X.ret)}">${X.ret >= 0 ? '賺' : '賠'} ${fmt(Math.abs(X.eq - START_CASH), 0)}<br>${pct(X.ret)}</b>${X.dead ? '<br><span class="neg">💥 爆倉</span>' : ''}`;
       const side = (X, k) => X[k].n ? `${X[k].n} 次，${X[k].w} 勝<br><span class="${c(X[k].pnl)}">${X[k].pnl >= 0 ? '+' : ''}${fmt(X[k].pnl, 0)}</span>` : '--';
+      const X3 = [A, C, B];
       const rows = [
-        ['最後結果', res(A), res(B)],
-        ['交易次數', A.n + (A.open ? '+1' : ''), B.n + (B.open ? '+1' : '')],
-        ['勝率', ...[A, B].map(X => X.win == null ? '--' : `${X.win.toFixed(0)}%<br>${X.w}勝${X.l}敗`)],
-        ['做多', side(A, 'L'), side(B, 'L')],
-        ['做空', side(A, 'S'), '不做空'],
-        ['平均賺', ...[A, B].map(X => `<span class="pos">${pct(X.aw)}</span>`)],
-        ['平均賠', ...[A, B].map(X => `<span class="neg">${pct(X.al)}</span>`)],
-        ['最大回落', ...[A, B].map(X => `<span class="neg">-${X.mdd.toFixed(2)}%</span>`)],
-        ['手續費', ...[A, B].map(X => fmt(X.fees, 0))],
-        ['不用手續費', ...[A, B].map(X => `<span class="${c(X.ret0)}">${pct(X.ret0)}</span>`)]
+        ['最後結果', ...X3.map(res)],
+        ['交易次數', ...X3.map(X => X.n + (X.open ? '+1' : ''))],
+        ['勝率', ...X3.map(X => X.win == null ? '--' : `${X.win.toFixed(0)}%<br>${X.w}勝${X.l}敗`)],
+        ['做多', ...X3.map(X => side(X, 'L'))],
+        ['做空', side(A, 'S'), side(C, 'S'), '不做空'],
+        ['平均賺', ...X3.map(X => `<span class="pos">${pct(X.aw)}</span>`)],
+        ['平均賠', ...X3.map(X => `<span class="neg">${pct(X.al)}</span>`)],
+        ['最大回落', ...X3.map(X => `<span class="neg">-${X.mdd.toFixed(2)}%</span>`)],
+        ['手續費', ...X3.map(X => fmt(X.fees, 0))],
+        ['不用手續費', ...X3.map(X => `<span class="${c(X.ret0)}">${pct(X.ret0)}</span>`)]
       ];
       $('btResult').style.display = 'block';
       $('btResult').innerHTML = `<div style="color:#8b93a7;margin-bottom:6px">${barTime(arr[0].time)} ～ ${barTime(arr.at(-1).time)}（${lev} 倍）<br>同期間買了放著不動：<span class="${c(hold)}">${pct(hold)}</span></div>
-        <table class="bt"><tr><th></th><th style="color:#f0b90b">多空都做</th><th>只做多</th></tr>
-        ${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')}</table>`;
-      $('btTrades').innerHTML = '<div style="color:#8b93a7">多空都做・最近 30 筆：</div>' + A.trades.slice(-30).reverse().map(t =>
-        `<div><span style="color:#8b93a7">${barTime(t.entryTime)}</span> <b class="${t.side === 'long' ? 'pos' : 'neg'}">${t.side === 'long' ? '多' : '空'}</b> @ ${fmt(t.entryPx)} → ${fmt(t.exitPx)}　<b class="${c(t.pnl)}">${pct(t.pct)}</b><br><span style="color:#8b93a7;font-size:11px">${t.reason}</span></div>`).join('');
+        <table class="bt"><tr><th></th><th>多空<br><small>沒停損</small></th><th style="color:#f0b90b">多空<br><small>＋根號停損</small></th><th>只做多<br><small>＋根號停損</small></th></tr>
+        ${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('')}</table>`;
+      $('btTrades').innerHTML = '<div style="color:#8b93a7">多空＋根號停損・最近 30 筆：</div>' + C.trades.slice(-30).reverse().map(t =>
+        `<div><span style="color:#8b93a7">${barTime(t.entryTime)}</span> <b class="${t.side === 'long' ? 'pos' : 'neg'}">${t.side === 'long' ? '多' : '空'}</b> @ ${fmt(t.entryPx)} → ${fmt(t.exitPx)}　<b class="${c(t.pnl)}">${pct(t.pct)}</b><br><span style="color:#8b93a7;font-size:11px">進場：${t.reason}${t.ref ? `（前波${t.side === 'long' ? '低' : '高'}點 ${fmt(t.ref, 2)}）` : ''}<br>出場：${t.why}</span></div>`).join('');
     } catch (e) {
       $('btResult').style.display = 'block';
       $('btResult').innerHTML = `<span class="neg">回測失敗：${e.message}</span>`;
@@ -757,6 +809,7 @@
   ['symbol', 'interval'].forEach(id => $(id).onchange = () => { saveSettings(); load(); });
   ['lookback', 'step', 'count'].forEach(id => $(id).onchange = () => { saveSettings(); calcLevels(); });
   ['tradeSize', 'lev', 'sl', 'maxTrades', 'btInterval', 'btBars', 'btFee', 'btLev'].forEach(id => $(id).onchange = saveSettings);
+  $('rootStop').onchange = () => { saveSettings(); drawStopLine(); };
 
   $('log').innerHTML = acct.log.map(x => `<div>${x}</div>`).join('');
   renderAcct();
