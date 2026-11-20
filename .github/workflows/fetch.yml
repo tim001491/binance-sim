@@ -2,10 +2,13 @@ name: fetch-klines
 on:
   push:
     branches: [data-fetch]
+permissions:
+  contents: write
 jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: download klines
         run: |
           mkdir out
@@ -17,11 +20,12 @@ jobs:
                 while(out.length<total){const lim=Math.min(1000,total-out.length);let d=null;
                   for(const h of hosts){try{const r=await fetch(`${h}/api/v3/klines?symbol=${sym}&interval=${itv}&limit=${lim}`+(end?`&endTime=${end}`:""));if(r.ok){d=await r.json();break}else console.error(h,r.status)}catch(e){console.error(h,e.message)}}
                   if(!d||!d.length)break; out=d.concat(out); end=d[0][0]-1; if(d.length<lim)break;}
-                require("fs").writeFileSync(`out/${sym}_${itv}.json`,JSON.stringify(out));console.log(itv,out.length);
+                require("fs").writeFileSync(`out/${sym}_${itv}.csv`,out.map(k=>[k[0],k[1],k[2],k[3],k[4],k[5]].join(",")).join("\n"));console.log(itv,out.length);
               })()' $itv 8000
           done
           ls -la out
-      - uses: actions/upload-artifact@v4
-        with:
-          name: klines
-          path: out
+      - name: commit data
+        run: |
+          mkdir -p data && cp out/*.csv data/
+          git config user.name github-actions && git config user.email actions@github.com
+          git add data && git commit -m "data [skip ci]" && git push
