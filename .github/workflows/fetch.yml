@@ -1,0 +1,27 @@
+name: fetch-klines
+on:
+  push:
+    branches: [data-fetch]
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: download klines
+        run: |
+          mkdir out
+          for itv in 5m 15m 1h 4h; do
+            node -e '
+              const [sym,itv,total]=["BTCUSDT",process.argv[1],+process.argv[2]];
+              (async()=>{let out=[],end;
+                const hosts=["https://data-api.binance.vision","https://api.binance.com","https://api1.binance.com"];
+                while(out.length<total){const lim=Math.min(1000,total-out.length);let d=null;
+                  for(const h of hosts){try{const r=await fetch(`${h}/api/v3/klines?symbol=${sym}&interval=${itv}&limit=${lim}`+(end?`&endTime=${end}`:""));if(r.ok){d=await r.json();break}else console.error(h,r.status)}catch(e){console.error(h,e.message)}}
+                  if(!d||!d.length)break; out=d.concat(out); end=d[0][0]-1; if(d.length<lim)break;}
+                require("fs").writeFileSync(`out/${sym}_${itv}.json`,JSON.stringify(out));console.log(itv,out.length);
+              })()' $itv 8000
+          done
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: klines
+          path: out
